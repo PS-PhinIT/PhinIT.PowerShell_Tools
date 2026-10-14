@@ -1,12 +1,43 @@
+﻿<#
+.SYNOPSIS
+    easyExecutionPolicy - grafischer Manager für PowerShell Execution Policies.
+
+.DESCRIPTION
+    WinForms-GUI zum Anzeigen, Setzen, Sichern und Wiederherstellen der PowerShell
+    Execution Policies je Scope (MachinePolicy, UserPolicy, Process, CurrentUser, LocalMachine).
+    - MachinePolicy/UserPolicy werden per GPO gesteuert und nur angezeigt (nicht setzbar).
+    - Process, CurrentUser und LocalMachine können geändert werden (mit Bestätigung).
+    - Beim Start wird automatisch ein Backup erstellt (Arbeitsspeicher + Datei in
+      %APPDATA%\easyExecutionPolicy\AutoBackups, die letzten 10 automatischen Backups bleiben erhalten).
+    - Backups/Exporte (JSON) können manuell gespeichert, importiert und wiederhergestellt werden;
+      importierte Dateien werden validiert (nur gültige Scopes und Policy-Werte).
+    Das Skript benötigt Administratorrechte und startet sich bei Bedarf selbst erhöht neu
+    (mit demselben PowerShell-Host: Windows PowerShell 5.1 oder PowerShell 7).
+
+.NOTES
+    Version: 0.0.4
+    Autor:   Andreas Hepp | PhinIT
+    Web:     www.phinit.de
+    Voraussetzungen: Windows, Windows PowerShell 5.1 oder PowerShell 7.x, Administratorrechte.
+#>
+
 # Assembly-Loading für Windows Forms und Drawing
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# Skriptinformationen (auf Skriptebene erfassen - innerhalb von Funktionen verweist $MyInvocation auf die Funktion)
+$script:AppVersion = "0.0.4"
+$script:ScriptPath = $PSCommandPath
+if ([string]::IsNullOrEmpty($script:ScriptPath)) { $script:ScriptPath = $MyInvocation.MyCommand.Path }
+
 # Globale Variablen
 $global:currentPolicies = @{}
 $global:backupPolicies = @{}
-$global:autoBackupPath = "$env:APPDATA\easyExecutionPolicy\AutoBackups"
+$global:autoBackupPath = Join-Path $env:APPDATA "easyExecutionPolicy\AutoBackups"
 $policyOptions = @("Restricted", "AllSigned", "RemoteSigned", "Unrestricted", "Bypass", "Undefined")
+# Nur diese Scopes können per Set-ExecutionPolicy gesetzt werden (MachinePolicy/UserPolicy = GPO)
+$script:SettableScopes = @("Process", "CurrentUser", "LocalMachine")
+$script:MaxBackupFileSize = 1MB
 
 # Hilfsfunktion zum Erstellen des Backup-Verzeichnisses
 function Initialize-BackupDirectory {
@@ -28,8 +59,17 @@ function Ensure-Admin {
 
         if ($dialogResult -eq [System.Windows.Forms.DialogResult]::Yes) {
             try {
-                $powershellPath = (Get-Command PowerShell).Source
-                $argumentList = "-File `"$($MyInvocation.MyCommand.Path)`""
+                if ([string]::IsNullOrEmpty($script:ScriptPath) -or -not (Test-Path -LiteralPath $script:ScriptPath)) {
+                    throw "Der Skriptpfad konnte nicht ermittelt werden. Bitte das Skript als Datei (.ps1) starten."
+                }
+                # Denselben PowerShell-Host verwenden (pwsh.exe bei PowerShell 7, sonst powershell.exe)
+                $exeName = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
+                $powershellPath = Join-Path $PSHOME $exeName
+                if (-not (Test-Path -LiteralPath $powershellPath)) {
+                    $powershellPath = (Get-Process -Id $PID).Path
+                }
+                # -ExecutionPolicy Bypass gilt nur für den neu gestarteten Prozess (Scope Process)
+                $argumentList = "-NoProfile -ExecutionPolicy Bypass -File `"$($script:ScriptPath)`""
                 Start-Process -FilePath $powershellPath -Verb RunAs -ArgumentList $argumentList -ErrorAction Stop
                 Write-Host "Die nicht-administrative Instanz wird beendet, da eine neue administrative Instanz gestartet wurde."
                 exit
@@ -75,6 +115,7 @@ function Backup-CurrentPolicies {
         [string]$CustomPath
     )
     
+    Get-CurrentExecutionPolicies
     $global:backupPolicies = $global:currentPolicies.Clone()
     Write-Host "Backup der aktuellen Execution Policies erstellt (Arbeitsspeicher)."
     
@@ -93,17 +134,17 @@ function Backup-CurrentPolicies {
             $filePath = if ($CustomPath) { 
                 $CustomPath 
             } else { 
-                "$global:autoBackupPath\ExecutionPolicyBackup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+                Join-Path $global:autoBackupPath "ExecutionPolicyBackup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
             }
             
-            $backupData | ConvertTo-Json -Depth 3 | Out-File -FilePath $filePath -Encoding UTF8
+            $backupData | ConvertTo-Json -Depth 3 | Out-File -LiteralPath $filePath -Encoding UTF8 -ErrorAction Stop
             Write-Host "Backup gespeichert unter: $filePath"
             
             if (-not $CustomPath) {
-                $autoBackups = Get-ChildItem -Path $global:autoBackupPath -Filter "ExecutionPolicyBackup_*.json" | 
-                              Sort-Object CreationTime -Descending
+                $autoBackups = @(Get-ChildItem -LiteralPath $global:autoBackupPath -Filter "ExecutionPolicyBackup_*.json" -File -ErrorAction SilentlyContinue |
+                              Sort-Object LastWriteTime -Descending)
                 if ($autoBackups.Count -gt 10) {
-                    $autoBackups | Select-Object -Skip 10 | Remove-Item -Force
+                    $autoBackups | Select-Object -Skip 10 | Remove-Item -Force -ErrorAction SilentlyContinue
                     Write-Host "Alte Backups bereinigt. Behalten: 10"
                 }
             }
@@ -111,81 +152,211 @@ function Backup-CurrentPolicies {
             return $filePath
         } catch {
             Write-Warning "Fehler beim Speichern des Backups: $($_.Exception.Message)"
-            [System.Windows.Forms.MessageBox]::Show("Backup konnte nicht gespeichert werden:`n$($_.Exception.Message)", "Backup Warnung", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            [System.Windows.Forms.MessageBox]::Show("Backup konnte nicht gespeichert werden:`n$($_.Exception.Message)", "Backup Warnung", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         }
     }
     
     return $null
 }
 
-# Funktion zum Wiederherstellen der Backup-Policies
+# Hilfsfunktion: Text aus nicht vertrauenswürdigen Dateien für die Anzeige entschärfen (Steuerzeichen, Länge)
+function Format-SafeText {
+    param($Text, [int]$MaxLength = 80)
+    if ($null -eq $Text) { return "-" }
+    $s = ([string]$Text) -replace '[\x00-\x1F\x7F]', ' '
+    if ($s.Length -gt $MaxLength) { $s = $s.Substring(0, $MaxLength) + "..." }
+    return $s
+}
+
+# Backup-/Exportdatei einlesen und Grundstruktur prüfen (Datei ist nicht vertrauenswürdig)
+function Read-PolicyBackupFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($item.PSIsContainer) { throw "Der angegebene Pfad ist ein Verzeichnis." }
+    if ($item.Length -gt $script:MaxBackupFileSize) { throw "Die Datei ist zu groß ($([math]::Round($item.Length / 1KB)) KB). Maximal erlaubt: $($script:MaxBackupFileSize / 1KB) KB." }
+
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($raw)) { throw "Die Datei ist leer." }
+    $content = $raw | ConvertFrom-Json -ErrorAction Stop
+
+    if ($null -eq $content -or $content -is [array] -or -not ($content.PSObject.Properties.Name -contains 'Policies') -or $null -eq $content.Policies) {
+        throw "Keine gültige Backup-/Exportdatei: Eigenschaft 'Policies' fehlt."
+    }
+    return $content
+}
+
+# Policies (Hashtable aus dem Arbeitsspeicher oder PSCustomObject aus JSON) validieren.
+# Liefert nur gültige, setzbare Scopes mit erlaubten Policy-Werten zurück.
+function Get-ValidatedPolicySet {
+    param($Policies)
+
+    $valid = [ordered]@{}
+    $invalid = New-Object System.Collections.Generic.List[string]
+    $entries = @{}
+
+    if ($Policies -is [System.Collections.IDictionary]) {
+        foreach ($key in $Policies.Keys) { $entries[[string]$key] = $Policies[$key] }
+    } elseif ($null -ne $Policies) {
+        foreach ($prop in $Policies.PSObject.Properties) { $entries[$prop.Name] = $prop.Value }
+    }
+
+    foreach ($key in $entries.Keys) {
+        # Nur informative Einträge (GPO-Scopes, effektive Policy) werden stillschweigend übersprungen
+        if (@("MachinePolicy", "UserPolicy", "Effective") -contains $key) { continue }
+        if ($script:SettableScopes -notcontains $key) {
+            $invalid.Add("Unbekannter Scope '$(Format-SafeText $key 40)' ignoriert.")
+        }
+    }
+
+    foreach ($scope in $script:SettableScopes) {
+        if (-not $entries.ContainsKey($scope)) { continue }
+        $value = $entries[$scope]
+        if ($null -eq $value -or $value -is [array] -or $value -is [System.Management.Automation.PSCustomObject]) {
+            $invalid.Add("Ungültiger Wert für Scope '$scope' ignoriert.")
+            continue
+        }
+        $value = ([string]$value).Trim()
+        if ($value -eq "Error" -or $value -eq "") { continue }
+        $match = $policyOptions | Where-Object { $_ -eq $value } | Select-Object -First 1
+        if (-not $match) {
+            $invalid.Add("Ungültige Policy '$(Format-SafeText $value 40)' für Scope '$scope' ignoriert.")
+            continue
+        }
+        $valid[$scope] = $match
+    }
+
+    return [pscustomobject]@{ Valid = $valid; Invalid = $invalid }
+}
+
+# Setzt die Execution Policy für einen Scope. Gibt einen Hinweistext zurück, wenn die Einstellung
+# zwar gespeichert, aber durch einen spezifischeren Scope (GPO oder Process) überschrieben wird.
+function Set-ScopeExecutionPolicy {
+    param(
+        [Parameter(Mandatory = $true)][string]$Scope,
+        [Parameter(Mandatory = $true)][string]$Policy
+    )
+
+    if ($script:SettableScopes -notcontains $Scope) { throw "Der Scope '$Scope' kann nicht per Set-ExecutionPolicy gesetzt werden (GPO)." }
+    if ($policyOptions -notcontains $Policy) { throw "Ungültige Execution Policy '$Policy'." }
+
+    try {
+        # -Force unterdrückt nur die Konsolen-Rückfrage; die Bestätigung erfolgt vorher in der GUI
+        Set-ExecutionPolicy -ExecutionPolicy $Policy -Scope $Scope -Force -ErrorAction Stop
+        return $null
+    } catch {
+        if ($_.FullyQualifiedErrorId -like "ExecutionPolicyOverride*") {
+            return "Scope '$Scope' wurde auf '$Policy' gesetzt, wird aber durch einen spezifischeren Scope (GPO oder Process) überschrieben."
+        }
+        throw
+    }
+}
+
+# Wendet einen validierten Policy-Satz an (jeder Scope einzeln, Fehler brechen nicht den Rest ab)
+function Invoke-PolicySet {
+    param([System.Collections.IDictionary]$PolicySet)
+
+    Get-CurrentExecutionPolicies
+    $errors = New-Object System.Collections.Generic.List[string]
+    $notes = New-Object System.Collections.Generic.List[string]
+    $changed = 0
+
+    foreach ($scope in $script:SettableScopes) {
+        if (-not $PolicySet.Contains($scope)) { continue }
+        $target = $PolicySet[$scope]
+        if ($global:currentPolicies[$scope] -eq $target) { continue }
+        try {
+            $note = Set-ScopeExecutionPolicy -Scope $scope -Policy $target
+            if ($note) { $notes.Add($note); Write-Warning $note }
+            $changed++
+            Write-Host "Wiederhergestellt: $scope = $target"
+        } catch {
+            $errors.Add("${scope}: $($_.Exception.Message)")
+            Write-Warning "Fehler beim Setzen von '$scope' auf '$target': $($_.Exception.Message)"
+        }
+    }
+
+    return [pscustomobject]@{ Changed = $changed; Errors = $errors; Notes = $notes }
+}
+
+# Funktion zum Wiederherstellen der Backup-Policies (Arbeitsspeicher oder Datei)
 function Restore-BackupPolicies {
     param(
         [switch]$FromFile,
-        [string]$BackupFilePath
+        [string]$BackupFilePath,
+        [string]$DialogTitle = "Backup-Datei zum Wiederherstellen auswählen"
     )
-    
+
     if ($FromFile -or $BackupFilePath) {
-        $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-        $openFileDialog.Filter = "JSON Backup files (*.json)|*.json|All files (*.*)|*.*"
-        $openFileDialog.Title = "Backup-Datei zum Wiederherstellen auswählen"
-        $openFileDialog.InitialDirectory = $global:autoBackupPath
-        
-        $filePath = if ($BackupFilePath) {
-            $BackupFilePath
-        } else {
-            if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                $openFileDialog.FileName
-            } else {
-                return $false
+        $filePath = $BackupFilePath
+        if (-not $filePath) {
+            $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+            try {
+                $openFileDialog.Filter = "JSON Backup files (*.json)|*.json|All files (*.*)|*.*"
+                $openFileDialog.Title = $DialogTitle
+                if (Test-Path -LiteralPath $global:autoBackupPath) { $openFileDialog.InitialDirectory = $global:autoBackupPath }
+                if ($openFileDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $false }
+                $filePath = $openFileDialog.FileName
+            } finally {
+                $openFileDialog.Dispose()
             }
         }
-        
+
         try {
-            $backupContent = Get-Content -Path $filePath -Raw | ConvertFrom-Json
-            $policiesToRestore = $backupContent.Policies
-            
-            $confirmText = "Backup-Details:`n"
-            $confirmText += "Datum: $($backupContent.BackupDate)`n"
-            $confirmText += "Computer: $($backupContent.ComputerName)`n"
-            $confirmText += "Typ: $($backupContent.BackupType)`n`n"
-            $confirmText += "Möchten Sie diese Policies wiederherstellen?"
-            
-            $dialogResult = [System.Windows.Forms.MessageBox]::Show($confirmText, "Backup wiederherstellen", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+            $backupContent = Read-PolicyBackupFile -Path $filePath
         } catch {
-            [System.Windows.Forms.MessageBox]::Show("Fehler beim Lesen der Backup-Datei:`n$($_.Exception.Message)", "Restore Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            [System.Windows.Forms.MessageBox]::Show("Fehler beim Lesen der Backup-Datei:`n$($_.Exception.Message)", "Restore Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             return $false
         }
+
+        $backupDate = if ($backupContent.BackupDate) { $backupContent.BackupDate } else { $backupContent.ExportDate }
+        $headerText = "Backup-Details:`n"
+        $headerText += "Datei: $(Format-SafeText ([IO.Path]::GetFileName($filePath)) 80)`n"
+        $headerText += "Datum: $(Format-SafeText $backupDate 40)`n"
+        $headerText += "Computer: $(Format-SafeText $backupContent.ComputerName 40)`n"
+        $headerText += "Typ: $(Format-SafeText $backupContent.BackupType 20)`n`n"
+        $policiesSource = $backupContent.Policies
     } else {
         if ($global:backupPolicies.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show("Kein Backup im Arbeitsspeicher verfügbar!`n`nVerwenden Sie 'Aus Datei wiederherstellen' um ein gespeichertes Backup zu laden.", "Restore Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            [System.Windows.Forms.MessageBox]::Show("Kein Backup im Arbeitsspeicher verfügbar!`n`nVerwenden Sie 'Aus Datei wiederherstellen' um ein gespeichertes Backup zu laden.", "Restore Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return $false
         }
-        
-        $policiesToRestore = $global:backupPolicies
-        $dialogResult = [System.Windows.Forms.MessageBox]::Show("Möchten Sie wirklich alle Execution Policies auf den Backup-Stand (Arbeitsspeicher) zurücksetzen?", "Restore bestätigen", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        $headerText = "Quelle: Backup im Arbeitsspeicher`n`n"
+        $policiesSource = $global:backupPolicies
     }
-    
-    if ($dialogResult -eq [System.Windows.Forms.DialogResult]::Yes) {
-        try {
-            $settableScopes = @("Process", "CurrentUser", "LocalMachine")
-            foreach ($scope in $settableScopes) {
-                if ($policiesToRestore.PSObject.Properties.Name -contains $scope) {
-                    $backupPolicy = $policiesToRestore.$scope
-                    if ($backupPolicy -and $backupPolicy -ne "Undefined" -and $backupPolicy -ne "Error") {
-                        Set-ExecutionPolicy -ExecutionPolicy $backupPolicy -Scope $scope -Force -ErrorAction Stop
-                    }
-                    Write-Host "Wiederhergestellt: $scope = $backupPolicy"
-                }
-            }
-            Update-PolicyDisplay
-            return $true
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show("Fehler beim Wiederherstellen: $($_.Exception.Message)", "Restore Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-            return $false
-        }
+
+    $validated = Get-ValidatedPolicySet -Policies $policiesSource
+    if ($validated.Valid.Count -eq 0) {
+        $msg = "Das Backup enthält keine gültigen, setzbaren Execution Policies."
+        if ($validated.Invalid.Count -gt 0) { $msg += "`n`n" + (($validated.Invalid | Select-Object -First 10) -join "`n") }
+        [System.Windows.Forms.MessageBox]::Show($msg, "Restore Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return $false
     }
-    return $false
+
+    $confirmText = $headerText + "Folgende Policies werden gesetzt (MachinePolicy/UserPolicy sind GPO-gesteuert und werden nicht verändert):`n"
+    foreach ($scope in $validated.Valid.Keys) { $confirmText += "  $scope = $($validated.Valid[$scope])`n" }
+    if ($validated.Invalid.Count -gt 0) {
+        $confirmText += "`nIgnorierte Einträge:`n  " + (($validated.Invalid | Select-Object -First 10) -join "`n  ") + "`n"
+    }
+    if (@($validated.Valid.Values | Where-Object { $_ -eq "Unrestricted" -or $_ -eq "Bypass" }).Count -gt 0) {
+        $confirmText += "`nWARNUNG: 'Unrestricted' bzw. 'Bypass' kann Sicherheitsrisiken darstellen.`n"
+    }
+    $confirmText += "`nMöchten Sie diese Policies wiederherstellen?"
+
+    $dialogResult = [System.Windows.Forms.MessageBox]::Show($confirmText, "Backup wiederherstellen", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($dialogResult -ne [System.Windows.Forms.DialogResult]::Yes) { return $false }
+
+    $result = Invoke-PolicySet -PolicySet $validated.Valid
+    Update-PolicyDisplay
+
+    if ($result.Errors.Count -gt 0) {
+        [System.Windows.Forms.MessageBox]::Show("Fehler beim Wiederherstellen:`n" + ($result.Errors -join "`n"), "Restore Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return $false
+    }
+    if ($result.Notes.Count -gt 0) {
+        [System.Windows.Forms.MessageBox]::Show("Hinweis:`n" + ($result.Notes -join "`n"), "Restore", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    }
+    return $true
 }
 
 # Funktion für manuelles Backup mit Dateiauswahl
@@ -194,12 +365,16 @@ function Create-ManualBackup {
     $saveFileDialog.Filter = "JSON Backup files (*.json)|*.json|All files (*.*)|*.*"
     $saveFileDialog.Title = "Backup speichern unter..."
     $saveFileDialog.FileName = "ExecutionPolicyBackup_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+    Initialize-BackupDirectory
     $saveFileDialog.InitialDirectory = $global:autoBackupPath
     
-    if ($saveFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        $savedPath = Backup-CurrentPolicies -SaveToFile -CustomPath $saveFileDialog.FileName
+    $dialogOk = ($saveFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)
+    $chosenPath = $saveFileDialog.FileName
+    $saveFileDialog.Dispose()
+    if ($dialogOk) {
+        $savedPath = Backup-CurrentPolicies -SaveToFile -CustomPath $chosenPath
         if ($savedPath) {
-            [System.Windows.Forms.MessageBox]::Show("Backup erfolgreich gespeichert unter:`n$savedPath", "Backup erstellt", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            [System.Windows.Forms.MessageBox]::Show("Backup erfolgreich gespeichert unter:`n$savedPath", "Backup erstellt", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
             return $true
         }
     }
@@ -222,7 +397,7 @@ Ensure-Admin
 
 # GUI Creation
 $mainForm = New-Object System.Windows.Forms.Form
-$mainForm.Text = "Execution Policy Manager v0.0.3"
+$mainForm.Text = "easyExecutionPolicy - Execution Policy Manager v$($script:AppVersion) | PhinIT"
 $mainForm.Size = New-Object System.Drawing.Size(820, 450)
 $mainForm.StartPosition = "CenterScreen"
 $mainForm.FormBorderStyle = 'FixedDialog'
@@ -261,18 +436,20 @@ $exportMenuItem.Add_Click({
     
     if ($saveFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         try {
+            Get-CurrentExecutionPolicies
             $exportData = @{
                 ExportDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
                 ComputerName = $env:COMPUTERNAME
                 Username = $env:USERNAME
                 Policies = $global:currentPolicies
             }
-            $exportData | ConvertTo-Json -Depth 3 | Out-File -FilePath $saveFileDialog.FileName -Encoding UTF8
-            [System.Windows.Forms.MessageBox]::Show("Konfiguration erfolgreich exportiert nach:`n$($saveFileDialog.FileName)", "Export erfolgreich", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            $exportData | ConvertTo-Json -Depth 3 | Out-File -LiteralPath $saveFileDialog.FileName -Encoding UTF8 -ErrorAction Stop
+            [System.Windows.Forms.MessageBox]::Show("Konfiguration erfolgreich exportiert nach:`n$($saveFileDialog.FileName)", "Export erfolgreich", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         } catch {
-            [System.Windows.Forms.MessageBox]::Show("Fehler beim Export: $($_.Exception.Message)", "Export Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            [System.Windows.Forms.MessageBox]::Show("Fehler beim Export: $($_.Exception.Message)", "Export Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     }
+    $saveFileDialog.Dispose()
 })
 
 $importMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
@@ -285,26 +462,17 @@ $importMenuItem.Add_Click({
     
     if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         try {
-            $importContent = Get-Content -Path $openFileDialog.FileName -Raw | ConvertFrom-Json
-            $result = [System.Windows.Forms.MessageBox]::Show("Import von '$($importContent.ComputerName)' ($($importContent.ExportDate))?`n`nNur änderbare Scopes werden importiert.", "Import bestätigen", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-            
-            if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-                $settableScopes = @("Process", "CurrentUser", "LocalMachine")
-                foreach ($scope in $settableScopes) {
-                    if ($importContent.Policies.PSObject.Properties.Name -contains $scope) {
-                        $policyValue = $importContent.Policies.$scope
-                        if ($policyValue -and $policyValue -ne "Undefined" -and $policyValue -ne "Error") {
-                            Set-ExecutionPolicy -ExecutionPolicy $policyValue -Scope $scope -Force
-                        }
-                    }
-                }
-                Update-PolicyDisplay
-                [System.Windows.Forms.MessageBox]::Show("Konfiguration erfolgreich importiert!", "Import erfolgreich", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            # Gemeinsame, validierte Restore-Logik verwenden (nur gültige Scopes/Policies, Bestätigung)
+            if (Restore-BackupPolicies -BackupFilePath $openFileDialog.FileName) {
+                $statusLabel.Text = "Konfiguration erfolgreich importiert."
+                $statusLabel.ForeColor = $colorSuccess
+                [System.Windows.Forms.MessageBox]::Show("Konfiguration erfolgreich importiert!", "Import erfolgreich", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
             }
         } catch {
-            [System.Windows.Forms.MessageBox]::Show("Fehler beim Import: $($_.Exception.Message)", "Import Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            [System.Windows.Forms.MessageBox]::Show("Fehler beim Import: $($_.Exception.Message)", "Import Fehler", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     }
+    $openFileDialog.Dispose()
 })
 
 $separatorMenuItem = New-Object System.Windows.Forms.ToolStripSeparator
@@ -511,8 +679,9 @@ $contentPanel.Controls.Add($lblEffectivePolicyValue)
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Name = "statusLabel"
 $statusLabel.Text = "Ready."
-$statusLabel.Location = New-Object System.Drawing.Point($leftMargin, 5)
-$statusLabel.Size = New-Object System.Drawing.Size(($footerPanel.Width - 2 * $leftMargin), 15)
+$statusLabel.Location = New-Object System.Drawing.Point($leftMargin, 2)
+$statusLabel.Size = New-Object System.Drawing.Size(($footerPanel.Width - 2 * $leftMargin), 22)
+$statusLabel.AutoEllipsis = $true
 $statusLabel.Font = $fontNormal
 $statusLabel.ForeColor = $colorSuccess
 $statusLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
@@ -571,7 +740,7 @@ $footerPanel.Controls.Add($restoreButton)
 # ToolTips für Buttons
 $toolTip.SetToolTip($applyButton, "Wenden Sie die ausgewählten Richtlinienänderungen an.")
 $toolTip.SetToolTip($refreshButton, "Aktualisieren Sie die angezeigten Richtlinienwerte.")
-$toolTip.SetToolTip($backupButton, "Erstellt ein Backup der aktuellen Execution Policies.")
+$toolTip.SetToolTip($backupButton, "Erstellt ein Backup der aktuellen Execution Policies (Arbeitsspeicher + Datei in AutoBackups).")
 $toolTip.SetToolTip($restoreButton, "Stellt das letzte Backup wieder her.")
 
 # Function to update GUI display
@@ -629,8 +798,8 @@ $refreshButton.Add_Click({
 })
 
 $backupButton.Add_Click({
-    Backup-CurrentPolicies
-    $statusLabel.Text = "Backup der aktuellen Policies erstellt."
+    $savedPath = Backup-CurrentPolicies -SaveToFile
+    $statusLabel.Text = if ($savedPath) { "Backup erstellt (Arbeitsspeicher + $([IO.Path]::GetFileName($savedPath)))." } else { "Backup der aktuellen Policies erstellt (Arbeitsspeicher)." }
     $statusLabel.ForeColor = $colorSuccess
     $restoreButton.Enabled = $true
 })
@@ -646,53 +815,64 @@ $applyButton.Add_Click({
     $statusLabel.Text = "Validating and applying selected policies..."
     $statusLabel.ForeColor = $colorWarning
 
-    $changesMade = $false
-    $errorOccurred = $false
-
-    $scopesToManage | Where-Object {$_.Settable} | ForEach-Object {
-        $scopeName = $_.Name
+    # Geplante Änderungen sammeln (foreach statt ForEach-Object, damit 'continue' korrekt funktioniert)
+    $pendingChanges = New-Object System.Collections.Generic.List[object]
+    foreach ($scopeInfo in ($scopesToManage | Where-Object { $_.Settable })) {
+        $scopeName = $scopeInfo.Name
         $comboBox = $contentPanel.Controls.Find("cb$scopeName", $true)[0]
         if ($comboBox -and $comboBox.SelectedItem) {
             $selectedPolicy = $comboBox.SelectedItem.ToString()
-            $currentPolicy = $global:currentPolicies[$scopeName] 
-
+            $currentPolicy = $global:currentPolicies[$scopeName]
             if ($selectedPolicy -ne $currentPolicy) {
-                if (-not (Validate-PolicyChange -Scope $scopeName -NewPolicy $selectedPolicy -CurrentPolicy $currentPolicy)) {
-                    continue
-                }
-                
-                try {
-                    Write-Host "Setting ExecutionPolicy for Scope '$scopeName' to '$selectedPolicy'..."
-                    if ($selectedPolicy -eq "Undefined") {
-                        if ($scopeName -eq "Process") {
-                            Set-ExecutionPolicy -ExecutionPolicy Undefined -Scope $scopeName -Force -ErrorAction Stop
-                        } else {
-                            $registryPath = switch ($scopeName) {
-                                "CurrentUser" { "HKCU:\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" }
-                                "LocalMachine" { "HKLM:\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" }
-                                default { "" }
-                            }
-                            
-                            if ($registryPath -and (Test-Path $registryPath)) {
-                                if (Get-ItemProperty -Path $registryPath -Name "ExecutionPolicy" -ErrorAction SilentlyContinue) {
-                                    Remove-ItemProperty -Path $registryPath -Name "ExecutionPolicy" -Force -ErrorAction Stop
-                                    Write-Host "Removed ExecutionPolicy registry value for Scope '$scopeName'."
-                                }
-                            }
-                        }
-                    } else {
-                        Set-ExecutionPolicy -ExecutionPolicy $selectedPolicy -Scope $scopeName -Force -ErrorAction Stop
-                    }
-                    $changesMade = $true
-                    Write-Host "Successfully processed Scope '$scopeName' for policy '$selectedPolicy'."
-                } catch {
-                    $errorMessage = "Error for Scope ${scopeName}: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
-                    $statusLabel.Text = $errorMessage 
-                    $statusLabel.ForeColor = [System.Drawing.Color]::Red
-                    $errorOccurred = $true
-                    Write-Warning "Error setting ExecutionPolicy for Scope '$scopeName' to '$selectedPolicy': $($_.Exception.Message)"
-                }
+                $pendingChanges.Add([pscustomobject]@{ Scope = $scopeName; Current = $currentPolicy; New = $selectedPolicy })
             }
+        }
+    }
+
+    if ($pendingChanges.Count -eq 0) {
+        $statusLabel.Text = "No changes were made to execution policies."
+        $statusLabel.ForeColor = $colorAccent
+        return
+    }
+
+    # Set-ExecutionPolicy wird mit -Force aufgerufen, daher hier eine explizite Bestätigung in der GUI
+    $summary = ($pendingChanges | ForEach-Object { "  $($_.Scope): $($_.Current) -> $($_.New)" }) -join "`n"
+    $confirm = [System.Windows.Forms.MessageBox]::Show("Folgende Änderungen werden angewendet:`n`n$summary`n`nFortfahren?", "Änderungen bestätigen", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Update-PolicyDisplay
+        $statusLabel.Text = "Änderungen abgebrochen."
+        $statusLabel.ForeColor = $colorAccent
+        return
+    }
+
+    $changesMade = $false
+    $errorOccurred = $false
+    $overrideNotes = New-Object System.Collections.Generic.List[string]
+
+    foreach ($change in $pendingChanges) {
+        $scopeName = $change.Scope
+        $selectedPolicy = $change.New
+        if (-not (Validate-PolicyChange -Scope $scopeName -NewPolicy $selectedPolicy -CurrentPolicy $change.Current)) {
+            continue
+        }
+
+        try {
+            Write-Host "Setting ExecutionPolicy for Scope '$scopeName' to '$selectedPolicy'..."
+            # Auch 'Undefined' über Set-ExecutionPolicy setzen: funktioniert für Windows PowerShell (Registry)
+            # und PowerShell 7 (powershell.config.json) gleichermaßen
+            $note = Set-ScopeExecutionPolicy -Scope $scopeName -Policy $selectedPolicy
+            if ($note) {
+                $overrideNotes.Add($note)
+                Write-Warning $note
+            }
+            $changesMade = $true
+            Write-Host "Successfully processed Scope '$scopeName' for policy '$selectedPolicy'."
+        } catch {
+            $errorMessage = "Error for Scope ${scopeName}: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+            $statusLabel.Text = $errorMessage
+            $statusLabel.ForeColor = [System.Drawing.Color]::Red
+            $errorOccurred = $true
+            Write-Warning "Error setting ExecutionPolicy for Scope '$scopeName' to '$selectedPolicy': $($_.Exception.Message)"
         }
     }
 
@@ -700,6 +880,10 @@ $applyButton.Add_Click({
 
     if ($errorOccurred) {
         # Status bereits gesetzt im Catch-Block
+    } elseif ($overrideNotes.Count -gt 0) {
+        $statusLabel.Text = "Policies gesetzt, aber teilweise durch einen spezifischeren Scope überschrieben."
+        $statusLabel.ForeColor = $colorWarning
+        [System.Windows.Forms.MessageBox]::Show("Hinweis:`n" + ($overrideNotes -join "`n"), "Execution Policy", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
     } elseif ($changesMade) {
         $statusLabel.Text = "Execution policies successfully applied."
         $statusLabel.ForeColor = $colorSuccess
@@ -713,7 +897,8 @@ $applyButton.Add_Click({
 $mainForm.Add_Load({
     $mainForm.BeginInvoke([Action]{ 
         Update-PolicyDisplay
-        Backup-CurrentPolicies
+        # Automatisches Start-Backup (Arbeitsspeicher + Datei in AutoBackups, Rotation: 10 Dateien)
+        Backup-CurrentPolicies -SaveToFile | Out-Null
         $restoreButton.Enabled = $true
         $statusLabel.Text = "Ready. Initial backup created."
         $statusLabel.ForeColor = $colorSuccess

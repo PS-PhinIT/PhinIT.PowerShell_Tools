@@ -1,9 +1,10 @@
 # Laufzeit-Logs und Exporte der Tools (koennen interne Pfade, Hostnamen und Benutzerdaten enthalten)
 Logs/
+Exports/
 *.log
 *.txt
 *.csv
-!easyADDummyUserCreator/AD_DummyUserList.csv
+!src/easyADDummyUserCreator/AD_DummyUserList.csv
 
 # Lokale Backups / Arbeitskopien
 *_backup.ps1

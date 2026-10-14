@@ -1,6 +1,6 @@
 ﻿# ============================================ 
-# Version:     0.1.0 
-# Autor:       Andreas Hepp (unterstützt durch Cascade AI) 
+# Version:     0.0.3 
+# Autor:       Andreas Hepp | PhinIT (www.phinit.de) 
 # ============================================ 
  
 #requires -Version 5.0 
@@ -22,7 +22,14 @@
     - Umfassende Logging-Funktionalität
     - Sicherheitsfunktionen für kritische AD-Operationen 
 .NOTES 
+    Version: 0.0.3
+    Autor:   Andreas Hepp | PhinIT (www.phinit.de)
     Stellen Sie sicher, dass das ActiveDirectory PowerShell-Modul installiert ist und Sie über die erforderlichen Berechtigungen verfügen. 
+    Logdatei: <Skriptordner>\Logs\easyADDummyUserCreator.log
+    Exporte:  <Skriptordner>\Exports\
+    Passwörter: Es wird kein Standardpasswort mehr ausgeliefert. Für CSV-Benutzer kann im GUI ein Initial-Passwort
+    eingegeben werden; bleibt das Feld leer, erhält jeder Benutzer ein eigenes, kryptografisch zufälliges Passwort.
+    Passwörter werden niemals in die Logdatei geschrieben.
 #> 
  
 #region Globale Variablen und Konfiguration 
@@ -31,15 +38,29 @@ Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase 
 Add-Type -AssemblyName Microsoft.VisualBasic
  
+# Basisverzeichnis des Skripts (unabhängig vom aktuellen Arbeitsverzeichnis)
+$scriptRootPath = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $PSScriptRoot
+} elseif ($MyInvocation.MyCommand.Path) {
+    Split-Path -Path $MyInvocation.MyCommand.Path -Parent
+} else {
+    (Get-Location).ProviderPath
+}
+
 $Global:AppConfig = @{ 
     AppName                = "easy DC Dummy Object Creator" 
-    ScriptVersion          = "0.0.2" 
+    ScriptVersion          = "0.0.3" 
     Author                 = "Andreas Hepp  |  www.phinit.de" 
-    DefaultCsvPath         = ".\AD_DummyUserList.csv" # Standardpfad, kann im GUI geändert werden 
-    DefaultPassword        = "P@sswOrd123!"            # Standardpasswort für neue User 
+    ScriptRoot             = $scriptRootPath
+    DefaultCsvPath         = (Join-Path $scriptRootPath "AD_DummyUserList.csv") # Standardpfad, kann im GUI geändert werden 
     EnablePasswordChange   = $true                     # Benutzer muss Passwort bei nächster Anmeldung ändern
-    LogFilePath           = ".\easyADDummyUserCreator.log" # Pfad für Logdatei
+    LogDirectory           = (Join-Path $scriptRootPath "Logs")
+    LogFilePath            = (Join-Path (Join-Path $scriptRootPath "Logs") "easyADDummyUserCreator.log") # Pfad für Logdatei
+    ExportDirectory        = (Join-Path $scriptRootPath "Exports") # Zielordner für Exporte/Berichte
 } 
+$Global:IsBusy = $false
+$script:CryptoRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$script:DomainInfoCache = $null 
  
 $Global:Window = $null 
 $Global:GuiControls = @{} 
@@ -75,11 +96,44 @@ $Global:SelectableADAttributes = @(
     @{Name="EmployeeID"; CsvHeader="EmployeeID"; Required=$false}
     @{Name="EmployeeType"; CsvHeader="employeeType"; Required=$false}
     @{Name="Initials"; CsvHeader="initials"; Required=$false}
-    @{Name="HomePage"; CsvHeader="homeDrive"; Required=$false}
+    @{Name="HomeDrive"; CsvHeader="homeDrive"; Required=$false}
     @{Name="HomeDirectory"; CsvHeader="homeDirectory"; Required=$false}
     @{Name="ScriptPath"; CsvHeader="scriptPath"; Required=$false}
     @{Name="ProfilePath"; CsvHeader="profilePath"; Required=$false}
 )
+
+# Zuordnung New-ADUser-Parametername -> LDAP-Attributname (für Set-ADUser -Replace / -OtherAttributes)
+$Global:ADAttributeLdapNames = @{
+    GivenName         = 'givenName'
+    Surname           = 'sn'
+    DisplayName       = 'displayName'
+    EmailAddress      = 'mail'
+    UserPrincipalName = 'userPrincipalName'
+    Department        = 'department'
+    Title             = 'title'
+    Company           = 'company'
+    Manager           = 'manager'
+    Description       = 'description'
+    Office            = 'physicalDeliveryOfficeName'
+    StreetAddress     = 'streetAddress'
+    City              = 'l'
+    State             = 'st'
+    PostalCode        = 'postalCode'
+    Country           = 'c'
+    OfficePhone       = 'telephoneNumber'
+    MobilePhone       = 'mobile'
+    proxyAddresses    = 'proxyAddresses'
+    EmployeeID        = 'employeeID'
+    EmployeeType      = 'employeeType'
+    Initials          = 'initials'
+    HomeDrive         = 'homeDrive'
+    HomeDirectory     = 'homeDirectory'
+    ScriptPath        = 'scriptPath'
+    ProfilePath       = 'profilePath'
+}
+
+# Attribute ohne eigenen New-ADUser-Parameter (werden über -OtherAttributes gesetzt)
+$Global:ADUserOtherAttributeNames = @('proxyAddresses', 'EmployeeType')
 #endregion 
  
 #region XAML Definition 
@@ -534,6 +588,7 @@ $XAML = @"
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <Grid Grid.Row="0">
@@ -565,12 +620,26 @@ $XAML = @"
                                     ToolTip="Leer = Alle User aus CSV" />
                             </Grid>
 
+                            <Grid Grid.Row="2" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="120" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Label Grid.Column="0" Content="Initial-Passwort:" />
+                                <PasswordBox
+                                    x:Name="PasswordBoxInitialPassword"
+                                    Grid.Column="1"
+                                    Margin="0,0,10,0"
+                                    VerticalAlignment="Top"
+                                    ToolTip="Optional: Initial-Passwort für CSV-Benutzer. Leer = zufälliges, sicheres Passwort pro Benutzer (wird nicht gespeichert/protokolliert)" />
+                            </Grid>
+
                             <Label
-                                Grid.Row="2"
+                                Grid.Row="3"
                                 Margin="0,4,0,0"
                                 Content="Zu importierende Attribute:" />
                             <ScrollViewer
-                                Grid.Row="3"
+                                Grid.Row="4"
                                 MaxHeight="150"
                                 Margin="0,4,0,0"
                                 Background="White"
@@ -1354,6 +1423,8 @@ $XAML = @"
  
 #region Logging und Hilfsfunktionen 
 function Write-Log { 
+    # Write-Log ist in Windows PowerShell 5.1 / PowerShell 7 kein eingebautes Cmdlet (PSScriptAnalyzer-Fehlalarm)
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '')]
     param( 
         [string]$Message, 
         [string]$Level = "INFO" # INFO, WARN, ERROR, DEBUG, SUCCESS 
@@ -1366,14 +1437,228 @@ function Write-Log {
         $Global:GuiControls.TextBlockStatus.Text = $Message 
     } 
     
-    # In Datei loggen
+    # In Datei loggen (Logs-Unterordner im Skriptverzeichnis)
     try {
-        $logEntry | Out-File -FilePath $Global:AppConfig.LogFilePath -Append -Encoding UTF8
+        if (-not $script:LogDirectoryReady) {
+            if (-not (Test-Path -LiteralPath $Global:AppConfig.LogDirectory -PathType Container)) {
+                New-Item -Path $Global:AppConfig.LogDirectory -ItemType Directory -Force | Out-Null
+            }
+            $script:LogDirectoryReady = $true
+        }
+        [System.IO.File]::AppendAllText($Global:AppConfig.LogFilePath, $logEntry + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($true))
     } catch {
         # Fehler beim Logging nicht weiterwerfen, um Hauptfunktionalität nicht zu beeinträchtigen
         Write-Host "Fehler beim Schreiben in Logdatei: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 } 
+
+function Get-ExportFilePath {
+    <#
+    .SYNOPSIS
+    Liefert einen Pfad im Export-Ordner des Skripts (wird bei Bedarf angelegt)
+    #>
+    param([Parameter(Mandatory = $true)][string]$FileName)
+
+    $exportDir = $Global:AppConfig.ExportDirectory
+    if (-not (Test-Path -LiteralPath $exportDir -PathType Container)) {
+        New-Item -Path $exportDir -ItemType Directory -Force | Out-Null
+    }
+    return (Join-Path $exportDir $FileName)
+}
+
+function ConvertTo-ADFilterValue {
+    <#
+    .SYNOPSIS
+    Maskiert einen Wert für die Verwendung in einem -Filter-String (einfache Anführungszeichen verdoppeln)
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Value)
+    if ($null -eq $Value) { return '' }
+    return $Value.Replace("'", "''")
+}
+
+function Get-CachedADDomain {
+    <#
+    .SYNOPSIS
+    Liefert das AD-Domänenobjekt (einmalig abgefragt und zwischengespeichert)
+    #>
+    if (-not $script:DomainInfoCache) {
+        $script:DomainInfoCache = Get-ADDomain -ErrorAction Stop
+    }
+    return $script:DomainInfoCache
+}
+
+function ConvertTo-IntOrZero {
+    <#
+    .SYNOPSIS
+    Wandelt eine GUI-Eingabe sicher in eine Ganzzahl um (ungültige Eingaben ergeben 0 statt einer Ausnahme)
+    #>
+    param($Value)
+    $parsed = 0
+    if ([int]::TryParse(([string]$Value).Trim(), [ref]$parsed)) { return $parsed }
+    return 0
+}
+
+function Get-CryptoRandomInt {
+    <#
+    .SYNOPSIS
+    Liefert eine kryptografisch sichere Zufallszahl im Bereich [0, MaxExclusive)
+    #>
+    param([Parameter(Mandatory = $true)][int]$MaxExclusive)
+
+    if ($MaxExclusive -le 0) { throw "MaxExclusive muss größer als 0 sein." }
+    $bytes = New-Object byte[] 4
+    # Rejection Sampling verhindert Modulo-Bias
+    $limit = [uint32]::MaxValue - ([uint32]::MaxValue % [uint32]$MaxExclusive)
+    do {
+        $script:CryptoRng.GetBytes($bytes)
+        $value = [System.BitConverter]::ToUInt32($bytes, 0)
+    } while ($value -ge $limit)
+    return [int]($value % [uint32]$MaxExclusive)
+}
+
+function ConvertTo-SecurePasswordString {
+    <#
+    .SYNOPSIS
+    Zentrale Umwandlung eines Klartext-Passworts in einen SecureString (ohne ConvertTo-SecureString -AsPlainText).
+    Das Passwort wird weder geloggt noch exportiert.
+    #>
+    param([Parameter(Mandatory = $true)][string]$PlainText)
+
+    $secure = New-Object System.Security.SecureString
+    foreach ($ch in $PlainText.ToCharArray()) { $secure.AppendChar($ch) }
+    $secure.MakeReadOnly()
+    return $secure
+}
+
+function New-RandomSecurePassword {
+    <#
+    .SYNOPSIS
+    Erzeugt ein kryptografisch zufälliges Passwort direkt als SecureString
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Erzeugt nur einen SecureString, keine Systemänderung')]
+    [CmdletBinding()]
+    param(
+        [string]$Complexity = "Mittel (12 Zeichen + Symbole)",
+        [int]$Length = 0
+    )
+    return (ConvertTo-SecurePasswordString -PlainText (Generate-SecurePassword -Complexity $Complexity -Length $Length))
+}
+
+function Get-InitialUserPassword {
+    <#
+    .SYNOPSIS
+    Liefert das im GUI eingegebene Initial-Passwort (SecureString) oder ein zufälliges Passwort pro Benutzer
+    #>
+    $passwordBox = $Global:GuiControls.PasswordBoxInitialPassword
+    if ($passwordBox -and $passwordBox.SecurePassword.Length -gt 0) {
+        return $passwordBox.SecurePassword
+    }
+    return (New-RandomSecurePassword -Complexity "Komplex (16 Zeichen + Spezial)")
+}
+
+function ConvertTo-CountryCode {
+    <#
+    .SYNOPSIS
+    Wandelt gängige Ländernamen in ISO-3166 2-Buchstaben-Codes um (AD-Attribut 'c')
+    #>
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
+    switch ($Value.Trim()) {
+        { $_ -in @('Germany', 'Deutschland', 'DEU') } { return 'DE' }
+        { $_ -in @('United States', 'USA', 'United States of America') } { return 'US' }
+        { $_ -in @('United Kingdom', 'UK', 'GBR', 'Great Britain') } { return 'GB' }
+        { $_ -in @('Austria', 'Österreich', 'AUT') } { return 'AT' }
+        { $_ -in @('Switzerland', 'Schweiz', 'CHE') } { return 'CH' }
+        { $_ -in @('France', 'Frankreich', 'FRA') } { return 'FR' }
+    }
+    return $Value
+}
+
+function Resolve-ADUserReference {
+    <#
+    .SYNOPSIS
+    Löst einen Benutzer-Verweis (DN, SamAccountName, UPN oder Mail) zum DistinguishedName auf (mit Cache)
+    #>
+    param(
+        [string]$Reference,
+        [hashtable]$Cache
+    )
+    if ([string]::IsNullOrWhiteSpace($Reference)) { return $null }
+    if ($Cache -and $Cache.ContainsKey($Reference)) { return $Cache[$Reference] }
+
+    $escaped = ConvertTo-ADFilterValue -Value $Reference
+    $dn = $null
+    try {
+        $found = Get-ADUser -Filter "DistinguishedName -eq '$escaped' -or SamAccountName -eq '$escaped' -or UserPrincipalName -eq '$escaped' -or mail -eq '$escaped'" -ErrorAction Stop |
+            Select-Object -First 1
+        if ($found) { $dn = $found.DistinguishedName }
+    } catch {
+        Write-Log "Benutzer-Verweis '$Reference' konnte nicht aufgelöst werden: $($_.Exception.Message)" -Level "DEBUG"
+    }
+    if ($Cache) { $Cache[$Reference] = $dn }
+    return $dn
+}
+
+function Invoke-UiRefresh {
+    <#
+    .SYNOPSIS
+    Verarbeitet ausstehende WPF-Dispatcher-Nachrichten, damit die GUI während langer Vorgänge aktualisiert wird
+    #>
+    try {
+        if (-not $Global:Window) { return }
+        $frame = New-Object System.Windows.Threading.DispatcherFrame
+        $callback = [System.Windows.Threading.DispatcherOperationCallback] {
+            param($f)
+            $f.Continue = $false
+            return $null
+        }
+        [void]$Global:Window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, $callback, $frame)
+        [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+    } catch {
+        Write-Log "UI-Aktualisierung fehlgeschlagen: $($_.Exception.Message)" -Level "DEBUG"
+    }
+}
+
+function Set-UiBusyState {
+    <#
+    .SYNOPSIS
+    Sperrt bzw. entsperrt die Bedienoberfläche während eines laufenden Vorgangs (verhindert Doppelklicks/Reentrancy)
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Ändert nur den GUI-Zustand')]
+    [CmdletBinding()]
+    param([bool]$Busy)
+    try {
+        if ($Global:Window -and $Global:Window.Content) {
+            $Global:Window.Content.IsHitTestVisible = -not $Busy
+        }
+        [System.Windows.Input.Mouse]::OverrideCursor = if ($Busy) { [System.Windows.Input.Cursors]::Wait } else { $null }
+    } catch {
+        Write-Log "UI-Status konnte nicht gesetzt werden: $($_.Exception.Message)" -Level "DEBUG"
+    }
+}
+
+function Invoke-GuiAction {
+    <#
+    .SYNOPSIS
+    Führt eine GUI-Aktion mit zentraler Fehlerbehandlung und Reentrancy-Schutz aus
+    #>
+    param([Parameter(Mandatory = $true)][scriptblock]$Action)
+
+    if ($Global:IsBusy) {
+        Write-Log "Es läuft bereits ein Vorgang - bitte warten." -Level "WARN"
+        return
+    }
+    $Global:IsBusy = $true
+    try {
+        & $Action
+    } catch {
+        Write-Log "Unbehandelter Fehler: $($_.Exception.Message)" -Level "ERROR"
+        [System.Windows.MessageBox]::Show("Es ist ein Fehler aufgetreten:`n$($_.Exception.Message)", "Fehler", "OK", "Error") | Out-Null
+    } finally {
+        Hide-Progress
+        $Global:IsBusy = $false
+    }
+}
 
 function Normalize-SamAccountName {
     <#
@@ -1516,7 +1801,7 @@ function Get-GuiControls {
         # Liste der erwarteten Controls
         $expectedControls = @(
             'TextBoxCsvPath', 'ButtonBrowseCsv', 'ButtonLoadCsv', 'DataGridCsvContent',
-            'ComboBoxTargetOU', 'TextBoxNumUsersToCreate', 'StackPanelAttributeSelection',
+            'ComboBoxTargetOU', 'TextBoxNumUsersToCreate', 'PasswordBoxInitialPassword', 'StackPanelAttributeSelection',
             'ButtonCreateADUsers', 'GridProgressArea', 'LabelProgress', 'ProgressBarMain',
             'TextBoxNumUsersForAction', 'ButtonFillAttributes', 'ButtonDisableUsers',
             'ButtonDeleteUsers', 'ButtonExportCreatedUsers', 'CheckBoxPwdNotExpires',
@@ -1631,80 +1916,76 @@ function Generate-SecurePassword {
     Generiert sichere Passwörter mit verschiedenen Komplexitätsstufen
     
     .DESCRIPTION
-    Erstellt Passwörter basierend auf ausgewählter Komplexität und Optionen
+    Erstellt Passwörter basierend auf ausgewählter Komplexität und Optionen.
+    Verwendet einen kryptografisch sicheren Zufallszahlengenerator (RandomNumberGenerator).
+    Das erzeugte Passwort wird niemals geloggt.
     #>
     param(
         [string]$Complexity = "Mittel",
         [bool]$IncludeNumbers = $true,
         [bool]$IncludeSymbols = $true,
-        [bool]$ExcludeAmbiguous = $true
+        [bool]$ExcludeAmbiguous = $true,
+        [int]$Length = 0 # 0 = Länge aus Komplexität ableiten
     )
     
-    try {
-        # Zeichensätze definieren
-        $lowercase = 'abcdefghijklmnopqrstuvwxyz'
-        $uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-        $numbers = '0123456789'
-        $symbols = '!@#$%^&*()_+-=[]{}|;:,.<>?'
-        
-        # Mehrdeutige Zeichen
-        $ambiguous = 'il1Lo0O'
-        
-        # Basis-Zeichensatz
-        $charSet = $lowercase + $uppercase
-        
-        # Länge basierend auf Komplexität
-        $length = switch ($Complexity) {
-            "Einfach (8 Zeichen)" { 8 }
-            "Mittel (12 Zeichen + Symbole)" { 12 }
-            "Komplex (16 Zeichen + Spezial)" { 16 }
-            "Hochsicher (20+ Zeichen)" { 24 }
-            default { 12 }
-        }
-        
-        # Zeichensatz erweitern
-        if ($IncludeNumbers) {
-            $charSet += $numbers
-        }
-        
-        if ($IncludeSymbols -and $Complexity -ne "Einfach (8 Zeichen)") {
-            $charSet += $symbols
-        }
-        
-        # Mehrdeutige Zeichen entfernen
-        if ($ExcludeAmbiguous) {
-            foreach ($char in $ambiguous.ToCharArray()) {
-                $charSet = $charSet.Replace($char.ToString(), '')
-            }
-        }
-        
-        # Passwort generieren
-        $password = ""
-        $random = New-Object System.Random
-        
-        # Mindestens ein Zeichen aus jeder Kategorie sicherstellen
-        if ($IncludeNumbers) { $password += $numbers[$random.Next($numbers.Length)] }
-        if ($IncludeSymbols -and $Complexity -ne "Einfach (8 Zeichen)") { $password += $symbols[$random.Next($symbols.Length)] }
-        $password += $lowercase[$random.Next($lowercase.Length)]
-        $password += $uppercase[$random.Next($uppercase.Length)]
-        
-        # Rest auffüllen
-        for ($i = $password.Length; $i -lt $length; $i++) {
-            $password += $charSet[$random.Next($charSet.Length)]
-        }
-        
-        # Passwort mischen
-        $passwordArray = $password.ToCharArray()
-        $passwordArray = $passwordArray | Sort-Object {Get-Random}
-        $password = -join $passwordArray
-        
-        Write-Log "Passwort generiert (Komplexität: $Complexity, Länge: $length)" -Level "DEBUG"
-        return $password
-        
-    } catch {
-        Write-Log "Fehler bei Passwort-Generierung: $($_.Exception.Message)" -Level "ERROR"
-        return "P@ssw0rd123!" # Fallback
+    # Zeichensätze definieren
+    $lowercase = 'abcdefghijklmnopqrstuvwxyz'
+    $uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    $numbers = '0123456789'
+    $symbols = '!@#$%^&*()_+-=[]{}|;:,.<>?'
+    
+    # Mehrdeutige Zeichen
+    $ambiguous = 'il1Lo0O'
+    
+    # Länge basierend auf Komplexität
+    $targetLength = switch ($Complexity) {
+        "Einfach (8 Zeichen)" { 8 }
+        "Mittel (12 Zeichen + Symbole)" { 12 }
+        "Komplex (16 Zeichen + Spezial)" { 16 }
+        "Hochsicher (20+ Zeichen)" { 24 }
+        default { 12 }
     }
+    if ($Length -gt 0) { $targetLength = $Length }
+    
+    $useSymbols = $IncludeSymbols -and $Complexity -ne "Einfach (8 Zeichen)"
+    
+    # Mehrdeutige Zeichen entfernen
+    if ($ExcludeAmbiguous) {
+        foreach ($char in $ambiguous.ToCharArray()) {
+            $lowercase = $lowercase.Replace($char.ToString(), '')
+            $uppercase = $uppercase.Replace($char.ToString(), '')
+            $numbers = $numbers.Replace($char.ToString(), '')
+        }
+    }
+    
+    # Basis-Zeichensatz erweitern
+    $charSet = $lowercase + $uppercase
+    if ($IncludeNumbers) { $charSet += $numbers }
+    if ($useSymbols) { $charSet += $symbols }
+    
+    # Mindestens ein Zeichen aus jeder gewählten Kategorie sicherstellen
+    $passwordChars = New-Object System.Collections.Generic.List[char]
+    $passwordChars.Add($lowercase[(Get-CryptoRandomInt -MaxExclusive $lowercase.Length)])
+    $passwordChars.Add($uppercase[(Get-CryptoRandomInt -MaxExclusive $uppercase.Length)])
+    if ($IncludeNumbers) { $passwordChars.Add($numbers[(Get-CryptoRandomInt -MaxExclusive $numbers.Length)]) }
+    if ($useSymbols) { $passwordChars.Add($symbols[(Get-CryptoRandomInt -MaxExclusive $symbols.Length)]) }
+    
+    # Rest auffüllen
+    while ($passwordChars.Count -lt $targetLength) {
+        $passwordChars.Add($charSet[(Get-CryptoRandomInt -MaxExclusive $charSet.Length)])
+    }
+    
+    # Passwort mischen (Fisher-Yates mit kryptografischem Zufall)
+    $passwordArray = $passwordChars.ToArray()
+    for ($i = $passwordArray.Length - 1; $i -gt 0; $i--) {
+        $j = Get-CryptoRandomInt -MaxExclusive ($i + 1)
+        $tmp = $passwordArray[$i]
+        $passwordArray[$i] = $passwordArray[$j]
+        $passwordArray[$j] = $tmp
+    }
+    
+    Write-Log "Passwort generiert (Komplexität: $Complexity, Länge: $($passwordArray.Length))" -Level "DEBUG"
+    return (-join $passwordArray)
 }
 
 function Generate-RandomUserData {
@@ -1824,13 +2105,13 @@ function Get-UserTemplate {
  
 function Import-CsvData { 
     $csvPath = $Global:GuiControls.TextBoxCsvPath.Text 
-    if (-not (Test-Path $csvPath -PathType Leaf)) { 
+    if ([string]::IsNullOrWhiteSpace($csvPath) -or -not (Test-Path -LiteralPath $csvPath -PathType Leaf)) { 
         Write-Log "CSV-Datei nicht gefunden: $csvPath" -Level "ERROR" 
         [System.Windows.MessageBox]::Show("Die angegebene CSV-Datei wurde nicht gefunden: `n$csvPath", "Fehler", "OK", "Error") 
         return 
     } 
     try { 
-        $Global:CsvData = Import-Csv -Path $csvPath 
+        $Global:CsvData = @(Import-Csv -LiteralPath $csvPath -Encoding UTF8)
         $Global:GuiControls.DataGridCsvContent.ItemsSource = $Global:CsvData 
         Write-Log "CSV-Datei erfolgreich geladen: $csvPath ($($Global:CsvData.Count) Einträge)" -Level "SUCCESS" 
  
@@ -1880,7 +2161,14 @@ function New-ADUsersFromCsv {
     } 
  
     $numUsersToCreateText = $Global:GuiControls.TextBoxNumUsersToCreate.Text 
-    $numUsersToCreate = if ([string]::IsNullOrWhiteSpace($numUsersToCreateText)) { $Global:CsvData.Count } else { [int]$numUsersToCreateText } 
+    $numUsersToCreate = 0
+    if ([string]::IsNullOrWhiteSpace($numUsersToCreateText)) {
+        $numUsersToCreate = @($Global:CsvData).Count
+    } elseif (-not [int]::TryParse($numUsersToCreateText.Trim(), [ref]$numUsersToCreate)) {
+        Write-Log "Ungültige Anzahl: '$numUsersToCreateText'" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Zahl für die Anzahl der Benutzer ein.", "Hinweis", "OK", "Warning")
+        return
+    }
  
     if ($numUsersToCreate -le 0) { 
         Write-Log "Anzahl der zu erstellenden Benutzer muss größer als 0 sein." -Level "WARN" 
@@ -1912,18 +2200,23 @@ function New-ADUsersFromCsv {
     $errorCount = 0 
     
     # HashSet für SamAccountName-Duplikate zur Laufzeit
-    $usedSamAccountNames = New-Object System.Collections.Generic.HashSet[string] 
+    $usedSamAccountNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $usedUpns = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $managerCache = @{}
+    $usesRandomPasswords = -not ($Global:GuiControls.PasswordBoxInitialPassword -and $Global:GuiControls.PasswordBoxInitialPassword.SecurePassword.Length -gt 0)
+    $csvRows = @($Global:CsvData)
  
-    for ($i = 0; $i -lt $Global:CsvData.Count; $i++) { 
+    for ($i = 0; $i -lt $csvRows.Count; $i++) { 
         if ($createdCount -ge $numUsersToCreate) { break } 
  
-        $csvRow = $Global:CsvData[$i] 
+        $csvRow = $csvRows[$i] 
         $userParams = @{ 
             Path    = $targetOU 
             Enabled = $true
             ChangePasswordAtLogon = $Global:AppConfig.EnablePasswordChange # Wert aus globaler Konfiguration verwenden
-            AccountPassword = (ConvertTo-SecureString $Global:AppConfig.DefaultPassword -AsPlainText -Force) 
+            AccountPassword = (Get-InitialUserPassword) # GUI-Eingabe oder zufälliges Passwort pro Benutzer (kein Standardpasswort)
         } 
+        $otherAttributes = @{}
  
         # Standard Name, falls nicht anders spezifiziert 
         $userParams.Name = if ($csvRow.PSObject.Properties["DisplayName"]) { $csvRow.DisplayName } elseif ($csvRow.PSObject.Properties["FirstName"] -and $csvRow.PSObject.Properties["LastName"]) { "$($csvRow.FirstName) $($csvRow.LastName)" } else { $csvRow.SamAccountName } 
@@ -1935,13 +2228,26 @@ function New-ADUsersFromCsv {
                 if (-not [string]::IsNullOrWhiteSpace($value)) { 
                     # Spezielle Behandlung für bestimmte Attribute 
                     if ($attrInfo.Name -eq "Country") { 
-                        # Hier könnte eine Konvertierung zu 2-Buchstaben-Code erfolgen, falls nötig 
-                        # Fürs Erste wird der Wert direkt übernommen 
+                        # AD erwartet einen ISO-3166 2-Buchstaben-Code
+                        $value = ConvertTo-CountryCode -Value $value
                     } 
                     if ($attrInfo.Name -eq "proxyAddresses") { 
-                        $value = $value -split ";" # Annahme: Semikolon-getrennte Liste 
+                        $value = [string[]]@($value -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) # Semikolon-getrennte Liste 
                     } 
-                    $userParams[$attrInfo.Name] = $value 
+                    if ($attrInfo.Name -eq "Manager") {
+                        # Manager muss als DN/SamAccountName aufgelöst werden (CSV enthält ggf. Mailadressen)
+                        $value = Resolve-ADUserReference -Reference $value -Cache $managerCache
+                        if (-not $value) {
+                            Write-Log "Manager '$($csvRow.($attrInfo.CsvHeader))' für Zeile $($i+1) nicht gefunden - Attribut wird ausgelassen." -Level "WARN"
+                            continue
+                        }
+                    }
+                    if ($Global:ADUserOtherAttributeNames -contains $attrInfo.Name) {
+                        # Kein eigener New-ADUser-Parameter -> über -OtherAttributes setzen
+                        $otherAttributes[$Global:ADAttributeLdapNames[$attrInfo.Name]] = $value
+                    } else {
+                        $userParams[$attrInfo.Name] = $value 
+                    }
                 } 
             } 
         } 
@@ -1975,21 +2281,31 @@ function New-ADUsersFromCsv {
             Write-Log "UPN automatisch generiert: $($userParams.UserPrincipalName)" -Level "DEBUG"
         }
         
-        # UPN auf Eindeutigkeit prüfen
+        # UPN auf Eindeutigkeit prüfen (innerhalb des Laufs und im AD)
+        if (-not $usedUpns.Add([string]$userParams.UserPrincipalName)) {
+            Write-Log "UPN '$($userParams.UserPrincipalName)' kommt in der CSV mehrfach vor. Benutzer wird übersprungen." -Level "WARN"
+            $errorCount++
+            continue
+        }
         try {
-            $existingUser = Get-ADUser -Filter "UserPrincipalName -eq '$($userParams.UserPrincipalName)'" -ErrorAction SilentlyContinue
+            $upnFilterValue = ConvertTo-ADFilterValue -Value $userParams.UserPrincipalName
+            $existingUser = Get-ADUser -Filter "UserPrincipalName -eq '$upnFilterValue'" -ErrorAction Stop
             if ($existingUser) {
                 Write-Log "UPN '$($userParams.UserPrincipalName)' existiert bereits für Benutzer '$($existingUser.SamAccountName)'. Benutzer wird übersprungen." -Level "WARN"
                 $errorCount++
                 continue
             }
         } catch {
-            # Fehler beim Prüfen ignorieren und fortfahren
+            # Prüfung ist optional - New-ADUser meldet echte Konflikte selbst
+            Write-Log "UPN-Prüfung für '$($userParams.UserPrincipalName)' fehlgeschlagen: $($_.Exception.Message)" -Level "DEBUG"
         }
  
+        if ($otherAttributes.Count -gt 0) {
+            $userParams.OtherAttributes = $otherAttributes
+        }
+
         try { 
             Write-Log "Erstelle Benutzer: $($userParams.SamAccountName)" -Level "DEBUG" 
-            # Write-Host ("DEBUG: New-ADUser @userParams: " + ($userParams | Format-List | Out-String)) # Zum Debuggen der Parameter 
             $newUser = New-ADUser @userParams -PassThru -ErrorAction Stop 
             Write-Log "Benutzer '$($newUser.SamAccountName)' erfolgreich erstellt." -Level "SUCCESS" 
             $Global:CreatedUsers.Add($newUser.SamAccountName) # Speichere nur SamAccountName für spätere Aktionen
@@ -2005,7 +2321,8 @@ function New-ADUsersFromCsv {
     
     Write-Log "Benutzererstellung abgeschlossen. $createdCount erfolgreich erstellt, $errorCount Fehler." -Level "INFO" 
     Update-Statistics
-    [System.Windows.MessageBox]::Show("Benutzererstellung abgeschlossen.`nErfolgreich: $createdCount`nFehler: $errorCount", "Ergebnis", "OK", "Information") 
+    $passwordHint = if ($usesRandomPasswords) { "`n`nHinweis: Es wurde kein Initial-Passwort angegeben. Jeder Benutzer hat ein eigenes, zufälliges Passwort erhalten (nicht gespeichert). Setzen Sie bei Bedarf ein Passwort per 'Set-ADAccountPassword' zurück." } else { "" }
+    [System.Windows.MessageBox]::Show("Benutzererstellung abgeschlossen.`nErfolgreich: $createdCount`nFehler: $errorCount$passwordHint", "Ergebnis", "OK", "Information") 
 } 
  
  
@@ -2080,6 +2397,7 @@ function Set-ADUserAttributesFromCsv {
 
     $usersProcessed = 0
     $usersFailed = 0
+    $managerCache = @{}
 
     for ($i = 0; $i -lt $numUsersToUpdate; $i++) {
         $samAccountName = $Global:CreatedUsers[$i]
@@ -2105,29 +2423,21 @@ function Set-ADUserAttributesFromCsv {
                             $attributesForReplaceCmd[$attrNameKey] = $proxyAddressesArray
                         }
                         "Manager" {
-                            # Prüfe ob Manager-DN gültig ist
-                            try {
-                                $managerUser = Get-ADUser -Filter "DistinguishedName -eq '$valueFromCsv' -or SamAccountName -eq '$valueFromCsv'" -ErrorAction SilentlyContinue
-                                if ($managerUser) {
-                                    $attributesForReplaceCmd[$attrNameKey] = $managerUser.DistinguishedName
-                                } else {
-                                    Write-Log "  Manager '$valueFromCsv' nicht gefunden für Benutzer '$samAccountName'" -Level "WARN"
-                                }
-                            } catch {
-                                Write-Log "  Fehler beim Validieren des Managers: $($_.Exception.Message)" -Level "WARN"
+                            # Prüfe ob Manager gültig ist (DN, SamAccountName, UPN oder Mail; mit Cache)
+                            $managerDn = Resolve-ADUserReference -Reference $valueFromCsv -Cache $managerCache
+                            if ($managerDn) {
+                                $attributesForReplaceCmd[$attrNameKey] = $managerDn
+                            } else {
+                                Write-Log "  Manager '$valueFromCsv' nicht gefunden für Benutzer '$samAccountName'" -Level "WARN"
                             }
                         }
                         "Country" {
                             # Konvertiere zu 2-Buchstaben-Code wenn nötig
-                            if ($valueFromCsv -eq "Germany" -or $valueFromCsv -eq "Deutschland") { $valueFromCsv = "DE" }
-                            elseif ($valueFromCsv -eq "United States" -or $valueFromCsv -eq "USA") { $valueFromCsv = "US" }
-                            elseif ($valueFromCsv -eq "United Kingdom" -or $valueFromCsv -eq "UK") { $valueFromCsv = "GB" }
-                            # Weitere Länder nach Bedarf hinzufügen
-                            $attributesForReplaceCmd[$attrNameKey] = $valueFromCsv
+                            $attributesForReplaceCmd[$attrNameKey] = ConvertTo-CountryCode -Value $valueFromCsv
                         }
                         "PostalCode" {
-                            # Entferne führende Nullen wenn nötig
-                            $attributesForReplaceCmd[$attrNameKey] = $valueFromCsv.TrimStart('0')
+                            # Führende Nullen bleiben erhalten (z.B. deutsche PLZ 01067)
+                            $attributesForReplaceCmd[$attrNameKey] = $valueFromCsv
                         }
                         "ExtensionAttribute1" { $attributesForReplaceCmd[$attrNameKey] = $valueFromCsv }
                         "ExtensionAttribute2" { $attributesForReplaceCmd[$attrNameKey] = $valueFromCsv }
@@ -2148,8 +2458,14 @@ function Set-ADUserAttributesFromCsv {
         }
 
         if ($attributesForReplaceCmd.Count -gt 0) {
+            # Parameternamen (z.B. Surname, City) in LDAP-Attributnamen (sn, l) für -Replace übersetzen
+            $ldapReplace = @{}
+            foreach ($key in $attributesForReplaceCmd.Keys) {
+                $ldapName = if ($Global:ADAttributeLdapNames.ContainsKey($key)) { $Global:ADAttributeLdapNames[$key] } else { $key }
+                $ldapReplace[$ldapName] = $attributesForReplaceCmd[$key]
+            }
             try {
-                Set-ADUser -Identity $samAccountName -Replace $attributesForReplaceCmd -ErrorAction Stop
+                Set-ADUser -Identity $samAccountName -Replace $ldapReplace -ErrorAction Stop
                 Write-Log "Benutzer '$samAccountName' erfolgreich aktualisiert." -Level "SUCCESS"
                 $usersProcessed++
             } catch {
@@ -2225,23 +2541,30 @@ function Remove-CreatedADUsers {
 
     $usersProcessed = 0
     $usersFailed = 0
+    $deletedUsers = New-Object System.Collections.Generic.List[string]
 
-    for ($i = 0; $i -lt [Math]::Min($numUsersToDelete, $Global:CreatedUsers.Count); $i++) {
-        $samAccountName = $Global:CreatedUsers[$i]
+    # Nur Benutzer löschen, die von diesem Tool erstellt wurden (Liste $Global:CreatedUsers)
+    $usersToDelete = @($Global:CreatedUsers | Select-Object -First ([Math]::Min($numUsersToDelete, $Global:CreatedUsers.Count)))
+    for ($i = 0; $i -lt $usersToDelete.Count; $i++) {
+        $samAccountName = $usersToDelete[$i]
+        Update-Progress -Current ($i + 1) -Total $usersToDelete.Count -Text "Lösche Benutzer: $samAccountName"
         try {
             Remove-ADUser -Identity $samAccountName -Confirm:$false -ErrorAction Stop
             Write-Log "Benutzer '$samAccountName' erfolgreich gelöscht." -Level "SUCCESS"
+            $deletedUsers.Add($samAccountName)
             $usersProcessed++
         } catch {
             Write-Log "Fehler beim Löschen von Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
             $usersFailed++
         }
     }
+    Hide-Progress
 
-    # Erfolgreich gelöschte Benutzer aus der Liste entfernen
-    for ($i = $usersProcessed - 1; $i -ge 0; $i--) {
-        $Global:CreatedUsers.RemoveAt($i)
+    # Nur tatsächlich gelöschte Benutzer aus der Liste entfernen (fehlgeschlagene bleiben nachverfolgbar)
+    foreach ($deletedUser in $deletedUsers) {
+        [void]$Global:CreatedUsers.Remove($deletedUser)
     }
+    Update-Statistics
 
     $summaryMessage = "Aktion 'User löschen' abgeschlossen. $usersProcessed Benutzer gelöscht, $usersFailed Fehler."
     Write-Log $summaryMessage -Level "INFO"
@@ -2257,13 +2580,13 @@ function Export-CreatedUsers {
     }
 
     try {
-        $exportPath = ".\Created_Users_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-        $exportData = @()
+        $exportPath = Get-ExportFilePath -FileName "Created_Users_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $exportData = New-Object System.Collections.Generic.List[object]
         
         foreach ($samAccountName in $Global:CreatedUsers) {
             try {
-                $user = Get-ADUser -Identity $samAccountName -Properties * -ErrorAction Stop
-                $exportData += [PSCustomObject]@{
+                $user = Get-ADUser -Identity $samAccountName -Properties DisplayName, EmailAddress, Created -ErrorAction Stop
+                $exportData.Add([PSCustomObject]@{
                     SamAccountName = $user.SamAccountName
                     DisplayName = $user.DisplayName
                     GivenName = $user.GivenName
@@ -2273,10 +2596,10 @@ function Export-CreatedUsers {
                     Enabled = $user.Enabled
                     Created = $user.Created
                     DistinguishedName = $user.DistinguishedName
-                }
+                })
             } catch {
                 Write-Log "Fehler beim Abrufen der Details für Benutzer '$samAccountName': $($_.Exception.Message)" -Level "WARN"
-                $exportData += [PSCustomObject]@{
+                $exportData.Add([PSCustomObject]@{
                     SamAccountName = $samAccountName
                     DisplayName = "Fehler beim Abrufen"
                     GivenName = ""
@@ -2286,7 +2609,7 @@ function Export-CreatedUsers {
                     Enabled = "Unbekannt"
                     Created = ""
                     DistinguishedName = ""
-                }
+                })
             }
         }
 
@@ -2305,7 +2628,12 @@ function Show-CsvBrowser {
         $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
         $openFileDialog.Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*"
         $openFileDialog.Title = "CSV-Datei auswählen"
-        $openFileDialog.InitialDirectory = Split-Path $Global:GuiControls.TextBoxCsvPath.Text -Parent
+        $initialDir = $Global:AppConfig.ScriptRoot
+        if (-not [string]::IsNullOrWhiteSpace($Global:GuiControls.TextBoxCsvPath.Text)) {
+            $csvDir = Split-Path -Path $Global:GuiControls.TextBoxCsvPath.Text -Parent
+            if ($csvDir -and (Test-Path -LiteralPath $csvDir -PathType Container)) { $initialDir = (Resolve-Path -LiteralPath $csvDir).ProviderPath }
+        }
+        $openFileDialog.InitialDirectory = $initialDir
 
         if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $Global:GuiControls.TextBoxCsvPath.Text = $openFileDialog.FileName
@@ -2449,71 +2777,71 @@ function Validate-TargetOU {
 
 function Register-EventHandlers { 
     # CSV-basierte Funktionen
-    if ($Global:GuiControls.ButtonBrowseCsv) { $Global:GuiControls.ButtonBrowseCsv.Add_Click({ Show-CsvBrowser }) }
-    if ($Global:GuiControls.ButtonLoadCsv) { $Global:GuiControls.ButtonLoadCsv.Add_Click({ Import-CsvData }) }
-    if ($Global:GuiControls.ButtonCreateADUsers) { $Global:GuiControls.ButtonCreateADUsers.Add_Click({ New-ADUsersFromCsv }) }
-    if ($Global:GuiControls.ButtonFillAttributes) { $Global:GuiControls.ButtonFillAttributes.Add_Click({ Set-ADUserAttributesFromCsv }) }
-    if ($Global:GuiControls.ButtonDisableUsers) { $Global:GuiControls.ButtonDisableUsers.Add_Click({ Disable-CreatedADUsers }) }
-    if ($Global:GuiControls.ButtonDeleteUsers) { $Global:GuiControls.ButtonDeleteUsers.Add_Click({ Remove-CreatedADUsers }) }
-    if ($Global:GuiControls.ButtonExportCreatedUsers) { $Global:GuiControls.ButtonExportCreatedUsers.Add_Click({ Export-CreatedUsers }) }
-    if ($Global:GuiControls.ButtonApplySecuritySettings) { $Global:GuiControls.ButtonApplySecuritySettings.Add_Click({ Apply-SecuritySettings }) }
-    #if ($Global:GuiControls.ButtonAssignToGroups) { $Global:GuiControls.ButtonAssignToGroups.Add_Click({ Add-ToGroup }) }
+    if ($Global:GuiControls.ButtonBrowseCsv) { $Global:GuiControls.ButtonBrowseCsv.Add_Click({ Invoke-GuiAction { Show-CsvBrowser } }) }
+    if ($Global:GuiControls.ButtonLoadCsv) { $Global:GuiControls.ButtonLoadCsv.Add_Click({ Invoke-GuiAction { Import-CsvData } }) }
+    if ($Global:GuiControls.ButtonCreateADUsers) { $Global:GuiControls.ButtonCreateADUsers.Add_Click({ Invoke-GuiAction { New-ADUsersFromCsv } }) }
+    if ($Global:GuiControls.ButtonFillAttributes) { $Global:GuiControls.ButtonFillAttributes.Add_Click({ Invoke-GuiAction { Set-ADUserAttributesFromCsv } }) }
+    if ($Global:GuiControls.ButtonDisableUsers) { $Global:GuiControls.ButtonDisableUsers.Add_Click({ Invoke-GuiAction { Disable-CreatedADUsers } }) }
+    if ($Global:GuiControls.ButtonDeleteUsers) { $Global:GuiControls.ButtonDeleteUsers.Add_Click({ Invoke-GuiAction { Remove-CreatedADUsers } }) }
+    if ($Global:GuiControls.ButtonExportCreatedUsers) { $Global:GuiControls.ButtonExportCreatedUsers.Add_Click({ Invoke-GuiAction { Export-CreatedUsers } }) }
+    if ($Global:GuiControls.ButtonApplySecuritySettings) { $Global:GuiControls.ButtonApplySecuritySettings.Add_Click({ Invoke-GuiAction { Apply-SecuritySettings } }) }
+    #if ($Global:GuiControls.ButtonAssignToGroups) { $Global:GuiControls.ButtonAssignToGroups.Add_Click({ Invoke-GuiAction { Add-ToGroup } }) }
     
     # Neue Event Handler für Benutzer-Erstellung & Verwaltung
-    #if ($Global:GuiControls.ButtonGeneratePasswords) { $Global:GuiControls.ButtonGeneratePasswords.Add_Click({ Generate-BulkPasswords }) }
-    if ($Global:GuiControls.ButtonGenerateRandomData) { $Global:GuiControls.ButtonGenerateRandomData.Add_Click({ Generate-BulkRandomData }) }
-    #if ($Global:GuiControls.ButtonCreateFromTemplate) { $Global:GuiControls.ButtonCreateFromTemplate.Add_Click({ Create-UsersFromTemplate }) }
-    #if ($Global:GuiControls.ButtonBrowseTemplateUser) { $Global:GuiControls.ButtonBrowseTemplateUser.Add_Click({ Browse-TemplateUser }) }
-    #if ($Global:GuiControls.ButtonSetTimeRestrictions) { $Global:GuiControls.ButtonSetTimeRestrictions.Add_Click({ Set-UserTimeRestrictions }) }
-    #if ($Global:GuiControls.ButtonBrowseAvatars) { $Global:GuiControls.ButtonBrowseAvatars.Add_Click({ Browse-AvatarPath }) }
-    #if ($Global:GuiControls.ButtonAssignAvatars) { $Global:GuiControls.ButtonAssignAvatars.Add_Click({ Assign-UserAvatars }) }
+    #if ($Global:GuiControls.ButtonGeneratePasswords) { $Global:GuiControls.ButtonGeneratePasswords.Add_Click({ Invoke-GuiAction { Generate-BulkPasswords } }) }
+    if ($Global:GuiControls.ButtonGenerateRandomData) { $Global:GuiControls.ButtonGenerateRandomData.Add_Click({ Invoke-GuiAction { Generate-BulkRandomData } }) }
+    #if ($Global:GuiControls.ButtonCreateFromTemplate) { $Global:GuiControls.ButtonCreateFromTemplate.Add_Click({ Invoke-GuiAction { Create-UsersFromTemplate } }) }
+    #if ($Global:GuiControls.ButtonBrowseTemplateUser) { $Global:GuiControls.ButtonBrowseTemplateUser.Add_Click({ Invoke-GuiAction { Browse-TemplateUser } }) }
+    #if ($Global:GuiControls.ButtonSetTimeRestrictions) { $Global:GuiControls.ButtonSetTimeRestrictions.Add_Click({ Invoke-GuiAction { Set-UserTimeRestrictions } }) }
+    #if ($Global:GuiControls.ButtonBrowseAvatars) { $Global:GuiControls.ButtonBrowseAvatars.Add_Click({ Invoke-GuiAction { Browse-AvatarPath } }) }
+    #if ($Global:GuiControls.ButtonAssignAvatars) { $Global:GuiControls.ButtonAssignAvatars.Add_Click({ Invoke-GuiAction { Assign-UserAvatars } }) }
     
     # Schnellzugriff Event Handler
-    if ($Global:GuiControls.ButtonQuickRandomUsers) { $Global:GuiControls.ButtonQuickRandomUsers.Add_Click({ Quick-CreateRandomUsers }) }
-    if ($Global:GuiControls.ButtonQuickCreateGroups) { $Global:GuiControls.ButtonQuickCreateGroups.Add_Click({ Quick-CreateGroups }) }
-    if ($Global:GuiControls.ButtonQuickTestData) { $Global:GuiControls.ButtonQuickTestData.Add_Click({ Quick-CreateTestData }) }
-    if ($Global:GuiControls.ButtonQuickCleanup) { $Global:GuiControls.ButtonQuickCleanup.Add_Click({ Quick-CleanupAll }) }
+    if ($Global:GuiControls.ButtonQuickRandomUsers) { $Global:GuiControls.ButtonQuickRandomUsers.Add_Click({ Invoke-GuiAction { Quick-CreateRandomUsers } }) }
+    if ($Global:GuiControls.ButtonQuickCreateGroups) { $Global:GuiControls.ButtonQuickCreateGroups.Add_Click({ Invoke-GuiAction { Quick-CreateGroups } }) }
+    if ($Global:GuiControls.ButtonQuickTestData) { $Global:GuiControls.ButtonQuickTestData.Add_Click({ Invoke-GuiAction { Quick-CreateTestData } }) }
+    if ($Global:GuiControls.ButtonQuickCleanup) { $Global:GuiControls.ButtonQuickCleanup.Add_Click({ Invoke-GuiAction { Quick-CleanupAll } }) }
     
     # Löschfunktionen Event Handler
-    if ($Global:GuiControls.ButtonDeleteGroups) { $Global:GuiControls.ButtonDeleteGroups.Add_Click({ Remove-CreatedGroups }) }
-    if ($Global:GuiControls.ButtonDeleteComputers) { $Global:GuiControls.ButtonDeleteComputers.Add_Click({ Remove-CreatedComputers }) }
-    if ($Global:GuiControls.ButtonDeleteOUs) { $Global:GuiControls.ButtonDeleteOUs.Add_Click({ Remove-CreatedOUs }) }
-    if ($Global:GuiControls.ButtonDeleteServiceAccounts) { $Global:GuiControls.ButtonDeleteServiceAccounts.Add_Click({ Remove-CreatedServiceAccounts }) }
-    if ($Global:GuiControls.ButtonExportAll) { $Global:GuiControls.ButtonExportAll.Add_Click({ Export-AllObjects }) }
+    if ($Global:GuiControls.ButtonDeleteGroups) { $Global:GuiControls.ButtonDeleteGroups.Add_Click({ Invoke-GuiAction { Remove-CreatedGroups } }) }
+    if ($Global:GuiControls.ButtonDeleteComputers) { $Global:GuiControls.ButtonDeleteComputers.Add_Click({ Invoke-GuiAction { Remove-CreatedComputers } }) }
+    if ($Global:GuiControls.ButtonDeleteOUs) { $Global:GuiControls.ButtonDeleteOUs.Add_Click({ Invoke-GuiAction { Remove-CreatedOUs } }) }
+    if ($Global:GuiControls.ButtonDeleteServiceAccounts) { $Global:GuiControls.ButtonDeleteServiceAccounts.Add_Click({ Invoke-GuiAction { Remove-CreatedServiceAccounts } }) }
+    if ($Global:GuiControls.ButtonExportAll) { $Global:GuiControls.ButtonExportAll.Add_Click({ Invoke-GuiAction { Export-AllObjects } }) }
     
     # Test-Umgebung Event Handler
-    if ($Global:GuiControls.ButtonCreateTestEnvironment) { $Global:GuiControls.ButtonCreateTestEnvironment.Add_Click({ Create-TestEnvironment }) }
-    if ($Global:GuiControls.ButtonCreateRandomUsers) { $Global:GuiControls.ButtonCreateRandomUsers.Add_Click({ Create-RandomUsers }) }
+    if ($Global:GuiControls.ButtonCreateTestEnvironment) { $Global:GuiControls.ButtonCreateTestEnvironment.Add_Click({ Invoke-GuiAction { Create-TestEnvironment } }) }
+    if ($Global:GuiControls.ButtonCreateRandomUsers) { $Global:GuiControls.ButtonCreateRandomUsers.Add_Click({ Invoke-GuiAction { Create-RandomUsers } }) }
     
     # Event Handler für Gruppen & Organisationsstruktur
-    if ($Global:GuiControls.ButtonCreateAutoGroups) { $Global:GuiControls.ButtonCreateAutoGroups.Add_Click({ Create-AutomaticGroups }) }
-    if ($Global:GuiControls.ButtonCreateNestedGroups) { $Global:GuiControls.ButtonCreateNestedGroups.Add_Click({ Create-NestedGroupStructure }) }
-    #if ($Global:GuiControls.ButtonCreateDynamicGroups) { $Global:GuiControls.ButtonCreateDynamicGroups.Add_Click({ Create-DynamicSecurityGroups }) }
-    #if ($Global:GuiControls.ButtonCreateOUStructure) { $Global:GuiControls.ButtonCreateOUStructure.Add_Click({ Create-OrganizationalUnitStructure }) }
+    if ($Global:GuiControls.ButtonCreateAutoGroups) { $Global:GuiControls.ButtonCreateAutoGroups.Add_Click({ Invoke-GuiAction { Create-AutomaticGroups } }) }
+    if ($Global:GuiControls.ButtonCreateNestedGroups) { $Global:GuiControls.ButtonCreateNestedGroups.Add_Click({ Invoke-GuiAction { Create-NestedGroupStructure } }) }
+    #if ($Global:GuiControls.ButtonCreateDynamicGroups) { $Global:GuiControls.ButtonCreateDynamicGroups.Add_Click({ Invoke-GuiAction { Create-DynamicSecurityGroups } }) }
+    #if ($Global:GuiControls.ButtonCreateOUStructure) { $Global:GuiControls.ButtonCreateOUStructure.Add_Click({ Invoke-GuiAction { Create-OrganizationalUnitStructure } }) }
     
     # Event Handler für Computer & Geräte
-    if ($Global:GuiControls.ButtonCreateComputers) { $Global:GuiControls.ButtonCreateComputers.Add_Click({ Create-ComputerObjects }) }
-    if ($Global:GuiControls.ButtonCreateServiceAccounts) { $Global:GuiControls.ButtonCreateServiceAccounts.Add_Click({ Create-ServiceAccounts }) }
-    #if ($Global:GuiControls.ButtonCreatePrinters) { $Global:GuiControls.ButtonCreatePrinters.Add_Click({ Create-PrinterObjects }) }
-    if ($Global:GuiControls.ButtonCreateBitLockerData) { $Global:GuiControls.ButtonCreateBitLockerData.Add_Click({ Create-ComputerBitLockerData }) }
-    if ($Global:GuiControls.ButtonCreateLAPSData) { $Global:GuiControls.ButtonCreateLAPSData.Add_Click({ Create-LAPSData }) }
+    if ($Global:GuiControls.ButtonCreateComputers) { $Global:GuiControls.ButtonCreateComputers.Add_Click({ Invoke-GuiAction { Create-ComputerObjects } }) }
+    if ($Global:GuiControls.ButtonCreateServiceAccounts) { $Global:GuiControls.ButtonCreateServiceAccounts.Add_Click({ Invoke-GuiAction { Create-ServiceAccounts } }) }
+    #if ($Global:GuiControls.ButtonCreatePrinters) { $Global:GuiControls.ButtonCreatePrinters.Add_Click({ Invoke-GuiAction { Create-PrinterObjects } }) }
+    if ($Global:GuiControls.ButtonCreateBitLockerData) { $Global:GuiControls.ButtonCreateBitLockerData.Add_Click({ Invoke-GuiAction { Create-ComputerBitLockerData } }) }
+    if ($Global:GuiControls.ButtonCreateLAPSData) { $Global:GuiControls.ButtonCreateLAPSData.Add_Click({ Invoke-GuiAction { Create-LAPSData } }) }
     
     # Event Handler für Test-Szenarien
-    if ($Global:GuiControls.ButtonCreateTestDataSet) { $Global:GuiControls.ButtonCreateTestDataSet.Add_Click({ Create-TestDataSet }) }
-    if ($Global:GuiControls.ButtonActivateChaosMode) { $Global:GuiControls.ButtonActivateChaosMode.Add_Click({ Activate-ChaosMode }) }
-    #if ($Global:GuiControls.ButtonStartPerformanceTest) { $Global:GuiControls.ButtonStartPerformanceTest.Add_Click({ Start-PerformanceTest }) }
+    if ($Global:GuiControls.ButtonCreateTestDataSet) { $Global:GuiControls.ButtonCreateTestDataSet.Add_Click({ Invoke-GuiAction { Create-TestDataSet } }) }
+    if ($Global:GuiControls.ButtonActivateChaosMode) { $Global:GuiControls.ButtonActivateChaosMode.Add_Click({ Invoke-GuiAction { Activate-ChaosMode } }) }
+    #if ($Global:GuiControls.ButtonStartPerformanceTest) { $Global:GuiControls.ButtonStartPerformanceTest.Add_Click({ Invoke-GuiAction { Start-PerformanceTest } }) }
     
     # Event Handler für Sicherheit & Compliance
-    if ($Global:GuiControls.ButtonApplyPasswordPolicies) { $Global:GuiControls.ButtonApplyPasswordPolicies.Add_Click({ Apply-PasswordPolicies }) }
-    if ($Global:GuiControls.ButtonCreateRBACRoles) { $Global:GuiControls.ButtonCreateRBACRoles.Add_Click({ Create-RBACRoles }) }
-    #if ($Global:GuiControls.ButtonCreateBitLockerKeys) { $Global:GuiControls.ButtonCreateBitLockerKeys.Add_Click({ Create-BitLockerKeys }) }
+    if ($Global:GuiControls.ButtonApplyPasswordPolicies) { $Global:GuiControls.ButtonApplyPasswordPolicies.Add_Click({ Invoke-GuiAction { Apply-PasswordPolicies } }) }
+    if ($Global:GuiControls.ButtonCreateRBACRoles) { $Global:GuiControls.ButtonCreateRBACRoles.Add_Click({ Invoke-GuiAction { Create-RBACRoles } }) }
+    #if ($Global:GuiControls.ButtonCreateBitLockerKeys) { $Global:GuiControls.ButtonCreateBitLockerKeys.Add_Click({ Invoke-GuiAction { Create-BitLockerKeys } }) }
     
     # Event Handler für Erweiterte Features
-    #if ($Global:GuiControls.ButtonCreateDNSEntries) { $Global:GuiControls.ButtonCreateDNSEntries.Add_Click({ Create-DNSEntries }) }
-    #if ($Global:GuiControls.ButtonSimulateMigration) { $Global:GuiControls.ButtonSimulateMigration.Add_Click({ Simulate-Migration }) }
-    #if ($Global:GuiControls.ButtonCreateKerberosTests) { $Global:GuiControls.ButtonCreateKerberosTests.Add_Click({ Create-KerberosTests }) }
-    #if ($Global:GuiControls.ButtonDocumentFSMO) { $Global:GuiControls.ButtonDocumentFSMO.Add_Click({ Document-FSMORoles }) }
-    if ($Global:GuiControls.ButtonCreateAdvancedFeatures) { $Global:GuiControls.ButtonCreateAdvancedFeatures.Add_Click({ Create-AdvancedFeatures }) }
+    #if ($Global:GuiControls.ButtonCreateDNSEntries) { $Global:GuiControls.ButtonCreateDNSEntries.Add_Click({ Invoke-GuiAction { Create-DNSEntries } }) }
+    #if ($Global:GuiControls.ButtonSimulateMigration) { $Global:GuiControls.ButtonSimulateMigration.Add_Click({ Invoke-GuiAction { Simulate-Migration } }) }
+    #if ($Global:GuiControls.ButtonCreateKerberosTests) { $Global:GuiControls.ButtonCreateKerberosTests.Add_Click({ Invoke-GuiAction { Create-KerberosTests } }) }
+    #if ($Global:GuiControls.ButtonDocumentFSMO) { $Global:GuiControls.ButtonDocumentFSMO.Add_Click({ Invoke-GuiAction { Document-FSMORoles } }) }
+    if ($Global:GuiControls.ButtonCreateAdvancedFeatures) { $Global:GuiControls.ButtonCreateAdvancedFeatures.Add_Click({ Invoke-GuiAction { Create-AdvancedFeatures } }) }
  
     Write-Log "Event Handler registriert." 
 } 
@@ -2659,8 +2987,9 @@ function Generate-UPN {
     
     try {
         if (-not $DefaultDomain) {
-            # Versuche die Standard-Domain aus AD zu ermitteln
-            $domain = Get-ADDomain -ErrorAction SilentlyContinue
+            # Versuche die Standard-Domain aus AD zu ermitteln (zwischengespeichert)
+            $domain = $null
+            try { $domain = Get-CachedADDomain } catch { Write-Log "Domäne konnte nicht ermittelt werden: $($_.Exception.Message)" -Level "DEBUG" }
             if ($domain) {
                 $DefaultDomain = $domain.DNSRoot
             } else {
@@ -2808,7 +3137,7 @@ function Generate-DummyAvatars {
     try {
         Add-Type -AssemblyName System.Drawing
         
-        $avatarDir = ".\DummyAvatars_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        $avatarDir = (Get-ExportFilePath -FileName "DummyAvatars_$(Get-Date -Format 'yyyyMMdd_HHmmss')")
         New-Item -Path $avatarDir -ItemType Directory -Force | Out-Null
         
         Show-Progress -Text "Generiere Dummy-Avatare..." -Value 0
@@ -2932,7 +3261,7 @@ function Generate-BulkPasswords {
                     -IncludeSymbols $includeSymbols `
                     -ExcludeAmbiguous $excludeAmbiguous
                 
-                Set-ADAccountPassword -Identity $user -NewPassword (ConvertTo-SecureString -String $newPassword -AsPlainText -Force) -ErrorAction Stop
+                Set-ADAccountPassword -Identity $user -NewPassword (ConvertTo-SecurePasswordString -PlainText $newPassword) -ErrorAction Stop
                 Write-Log "Passwort für ${user} erfolgreich zurückgesetzt" -Level "SUCCESS"
                 $processed++
             }
@@ -3047,7 +3376,7 @@ function Create-UsersFromTemplate {
             return
         }
 
-        $numUsers = [int]$Global:GuiControls.TextBoxNumUsersToCreate.Text
+        $numUsers = ConvertTo-IntOrZero -Value $Global:GuiControls.TextBoxNumUsersToCreate.Text
         if ($numUsers -lt 1) {
             Write-Log "Ungültige Anzahl Benutzer angegeben: $numUsers" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Benutzern an.", "Hinweis", "OK", "Warning")
@@ -3317,7 +3646,7 @@ function Create-TestEnvironment {
         
         try {
             # Prüfe ob Haupt-OU bereits existiert
-            $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$companyOU'" -ErrorAction SilentlyContinue
+            $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $companyOU)'" -ErrorAction SilentlyContinue
             
             if (-not $existingOU) {
                 New-ADOrganizationalUnit -Name $companyName `
@@ -3345,7 +3674,7 @@ function Create-TestEnvironment {
                 $ouPath = "OU=$ouName,$companyOU"
                 
                 try {
-                    $existingSubOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$ouPath'" -ErrorAction SilentlyContinue
+                    $existingSubOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $ouPath)'" -ErrorAction SilentlyContinue
                     
                     if (-not $existingSubOU) {
                         New-ADOrganizationalUnit -Name $ouName `
@@ -3405,7 +3734,7 @@ function Create-RandomUsers {
         if ([string]::IsNullOrWhiteSpace($userCount)) {
             $userCount = 50
         } else {
-            $userCount = [int]$userCount
+            $userCount = ConvertTo-IntOrZero -Value $userCount
         }
         
         if ($userCount -le 0) {
@@ -3428,7 +3757,7 @@ function Create-RandomUsers {
             # Versuche USERS Unter-OU zu verwenden
             $testUserOU = "OU=USERS,$targetOU"
             try {
-                $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$testUserOU'" -ErrorAction SilentlyContinue
+                $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $testUserOU)'" -ErrorAction SilentlyContinue
                 if ($existingOU) {
                     $userOU = $testUserOU
                     Write-Log "Verwende USERS OU: $userOU" -Level "DEBUG"
@@ -3475,13 +3804,13 @@ function Create-RandomUsers {
                 $userParams = @{
                     Name = "$firstName $lastName"
                     SamAccountName = $samAccountName
-                    UserPrincipalName = "$samAccountName@$((Get-ADDomain).DNSRoot)"
+                    UserPrincipalName = "$samAccountName@$((Get-CachedADDomain).DNSRoot)"
                     GivenName = $firstName
                     Surname = $lastName
                     DisplayName = "$firstName $lastName"
                     Path = $userOU
                     Enabled = $true
-                    AccountPassword = (ConvertTo-SecureString -String (Generate-SecurePassword) -AsPlainText -Force)
+                    AccountPassword = (New-RandomSecurePassword)
                     ChangePasswordAtLogon = $false
                 }
                 
@@ -3559,20 +3888,20 @@ function Export-AllObjects {
         
         Show-Progress -Text "Exportiere Objekte..."
         
-        $exportData = @()
+        $exportData = New-Object System.Collections.Generic.List[object]
         
         # Benutzer exportieren
         foreach ($user in $Global:CreatedUsers) {
             try {
-                $adUser = Get-ADUser -Identity $user -Properties * -ErrorAction Stop
-                $exportData += [PSCustomObject]@{
+                $adUser = Get-ADUser -Identity $user -Properties whenCreated -ErrorAction Stop
+                $exportData.Add([PSCustomObject]@{
                     ObjectType = "User"
                     Name = $adUser.Name
                     SamAccountName = $adUser.SamAccountName
                     DistinguishedName = $adUser.DistinguishedName
                     Created = $adUser.whenCreated
                     Enabled = $adUser.Enabled
-                }
+                })
             } catch {
                 Write-Log "Fehler beim Export von Benutzer '$user': $($_.Exception.Message)" -Level "WARN"
             }
@@ -3581,15 +3910,15 @@ function Export-AllObjects {
         # Gruppen exportieren
         foreach ($group in $Global:CreatedGroups) {
             try {
-                $adGroup = Get-ADGroup -Identity $group -Properties * -ErrorAction Stop
-                $exportData += [PSCustomObject]@{
+                $adGroup = Get-ADGroup -Identity $group -Properties whenCreated -ErrorAction Stop
+                $exportData.Add([PSCustomObject]@{
                     ObjectType = "Group"
                     Name = $adGroup.Name
                     SamAccountName = $adGroup.SamAccountName
                     DistinguishedName = $adGroup.DistinguishedName
                     Created = $adGroup.whenCreated
                     Enabled = "N/A"
-                }
+                })
             } catch {
                 Write-Log "Fehler beim Export von Gruppe '$group': $($_.Exception.Message)" -Level "WARN"
             }
@@ -3598,15 +3927,15 @@ function Export-AllObjects {
         # Computer exportieren
         foreach ($computer in $Global:CreatedComputers) {
             try {
-                $adComputer = Get-ADComputer -Identity $computer -Properties * -ErrorAction Stop
-                $exportData += [PSCustomObject]@{
+                $adComputer = Get-ADComputer -Identity $computer -Properties whenCreated -ErrorAction Stop
+                $exportData.Add([PSCustomObject]@{
                     ObjectType = "Computer"
                     Name = $adComputer.Name
                     SamAccountName = $adComputer.SamAccountName
                     DistinguishedName = $adComputer.DistinguishedName
                     Created = $adComputer.whenCreated
                     Enabled = $adComputer.Enabled
-                }
+                })
             } catch {
                 Write-Log "Fehler beim Export von Computer '$computer': $($_.Exception.Message)" -Level "WARN"
             }
@@ -3614,35 +3943,35 @@ function Export-AllObjects {
         
         # OUs dokumentieren
         foreach ($ou in $Global:CreatedOUs) {
-            $exportData += [PSCustomObject]@{
+            $exportData.Add([PSCustomObject]@{
                 ObjectType = "OU"
-                Name = ($ou -split ',')[0] -replace 'OU=', ''
+                Name = (($ou -split ',')[0] -replace 'OU=', '')
                 SamAccountName = "N/A"
                 DistinguishedName = $ou
                 Created = "N/A"
                 Enabled = "N/A"
-            }
+            })
         }
         
         # Service Accounts exportieren
         foreach ($service in $Global:CreatedServiceAccounts) {
             try {
-                $adService = Get-ADUser -Identity $service -Properties * -ErrorAction Stop
-                $exportData += [PSCustomObject]@{
+                $adService = Get-ADUser -Identity $service -Properties whenCreated -ErrorAction Stop
+                $exportData.Add([PSCustomObject]@{
                     ObjectType = "ServiceAccount"
                     Name = $adService.Name
                     SamAccountName = $adService.SamAccountName
                     DistinguishedName = $adService.DistinguishedName
                     Created = $adService.whenCreated
                     Enabled = $adService.Enabled
-                }
+                })
             } catch {
                 Write-Log "Fehler beim Export von Service Account '$service': $($_.Exception.Message)" -Level "WARN"
             }
         }
         
         # Export
-        $exportPath = ".\AllCreatedObjects_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $exportPath = (Get-ExportFilePath -FileName "AllCreatedObjects_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
         $exportData | Export-Csv -Path $exportPath -NoTypeInformation -Encoding UTF8
         
         Hide-Progress
@@ -3681,26 +4010,37 @@ function Quick-CreateGroups {
             @{Name="Gäste"; Description="Eingeschränkte Gastbenutzer"}
         )
 
+        $current = 0
         foreach ($group in $groups) {
+            $current++
             try {
-                New-ADGroup -Name $group.Name `
-                    -GroupScope Global `
-                    -GroupCategory Security `
-                    -Description $group.Description `
-                    -ErrorAction Stop
-                
-                Write-Log "Gruppe $($group.Name) erfolgreich erstellt" -Level "SUCCESS"
-                $processed++
+                # Vorhandene (z.B. integrierte) Gruppen gleichen Namens nicht anfassen
+                $existing = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $group.Name)' -or SamAccountName -eq '$(ConvertTo-ADFilterValue -Value $group.Name)'" -ErrorAction SilentlyContinue
+                if ($existing) {
+                    Write-Log "Gruppe $($group.Name) existiert bereits, übersprungen" -Level "WARN"
+                    $failed++
+                } else {
+                    New-ADGroup -Name $group.Name `
+                        -GroupScope Global `
+                        -GroupCategory Security `
+                        -Description $group.Description `
+                        -ErrorAction Stop
+                    
+                    $Global:CreatedGroups.Add($group.Name)
+                    Write-Log "Gruppe $($group.Name) erfolgreich erstellt" -Level "SUCCESS"
+                    $processed++
+                }
             }
             catch {
                 Write-Log "Fehler beim Erstellen der Gruppe $($group.Name): $($_.Exception.Message)" -Level "ERROR"
                 $failed++
             }
             
-            Update-Progress -Current $processed -Total $groups.Count
+            Update-Progress -Current $current -Total $groups.Count
         }
 
         Hide-Progress
+        Update-Statistics
         [System.Windows.MessageBox]::Show("Gruppen-Erstellung abgeschlossen.`n$processed Gruppen erstellt, $failed Fehler.", "Vorgang abgeschlossen", "OK", "Information")
 
     }
@@ -3723,9 +4063,9 @@ function Ensure-TestOUs {
         Write-Log "Erstelle dedizierte Test-OUs..." -Level "INFO"
         
         $testOUs = @{
-            "USER" = "Test User Accounts"
+            "USERS" = "Test User Accounts"
             "GROUPS" = "Test Security Groups"
-            "COMPUTER" = "Test Computer Accounts"
+            "COMPUTERS" = "Test Computer Accounts"
             "SERVICES" = "Test Service Accounts"
             "RESOURCES" = "Test Resources"
         }
@@ -3737,7 +4077,7 @@ function Ensure-TestOUs {
             
             try {
                 # Prüfe ob OU bereits existiert
-                $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$ouPath'" -ErrorAction SilentlyContinue
+                $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $ouPath)'" -ErrorAction SilentlyContinue
                 
                 if (-not $existingOU) {
                     New-ADOrganizationalUnit -Name $ouName `
@@ -3786,8 +4126,9 @@ function Quick-CreateTestData {
 
         # Anzahl der zu erstellenden Benutzer aus TextBox oder Standard
         $numUsers = 10
-        if (-not [string]::IsNullOrWhiteSpace($Global:GuiControls.TextBoxNumUsersToCreate.Text)) {
-            $numUsers = [int]$Global:GuiControls.TextBoxNumUsersToCreate.Text
+        $parsedNum = 0
+        if ([int]::TryParse(([string]$Global:GuiControls.TextBoxNumUsersToCreate.Text).Trim(), [ref]$parsedNum) -and $parsedNum -gt 0) {
+            $numUsers = $parsedNum
         }
 
         $result = [System.Windows.MessageBox]::Show(
@@ -3808,20 +4149,28 @@ function Quick-CreateTestData {
         # Testbenutzer erstellen
         $userSuccess = 0
         $userError = 0
+        $departments = @("IT", "HR", "Finance", "Sales", "Marketing")
+        $usersByDepartment = @{}
+        foreach ($dept in $departments) { $usersByDepartment[$dept] = New-Object System.Collections.Generic.List[string] }
         
         for ($i = 1; $i -le $numUsers; $i++) {
             try {
                 # Zufällige Daten generieren
                 $firstName = Get-RandomFirstName
                 $lastName = Get-RandomLastName
-                $department = Get-RandomDepartment
+                $department = $departments | Get-Random
                 $title = Get-RandomJobTitle
                 $city = Get-RandomCity
+                # sAMAccountName max. 20 Zeichen, nur unkritische Zeichen
+                $samBase = ("$firstName.$lastName".ToLower() -replace 'ä','ae' -replace 'ö','oe' -replace 'ü','ue' -replace 'ß','ss' -replace '[^a-z0-9.]','')
+                $suffix = [string]$i
+                if ($samBase.Length + $suffix.Length -gt 20) { $samBase = $samBase.Substring(0, 20 - $suffix.Length) }
+                $samAccountName = "$samBase$suffix"
                 
                 $user = @{
-                    Name = "$firstName.$lastName"
-                    SamAccountName = "$($firstName.ToLower()).$($lastName.ToLower())$i"
-                    UserPrincipalName = "$($firstName.ToLower()).$($lastName.ToLower())$i@$((Get-ADDomain).DNSRoot)"
+                    Name = "$firstName.$lastName$suffix"
+                    SamAccountName = $samAccountName
+                    UserPrincipalName = "$samAccountName@$((Get-CachedADDomain).DNSRoot)"
                     GivenName = $firstName
                     Surname = $lastName
                     DisplayName = "$firstName $lastName"
@@ -3834,12 +4183,13 @@ function Quick-CreateTestData {
                     OfficePhone = Get-RandomPhoneNumber
                     Path = $userOU
                     Enabled = $true
-                    AccountPassword = (ConvertTo-SecureString -String (Generate-SecurePassword -Complexity "Mittel (12 Zeichen + Symbole)") -AsPlainText -Force)
+                    AccountPassword = (New-RandomSecurePassword -Complexity "Mittel (12 Zeichen + Symbole)")
                     ChangePasswordAtLogon = $true
                 }
                 
-                New-ADUser @user
+                New-ADUser @user -ErrorAction Stop
                 $Global:CreatedUsers.Add($user.SamAccountName)
+                $usersByDepartment[$department].Add($user.SamAccountName)
                 Write-Log "Testbenutzer '$($user.DisplayName)' in OU '$userOU' erstellt" -Level "SUCCESS"
                 $userSuccess++
             }
@@ -3857,8 +4207,6 @@ function Quick-CreateTestData {
         $groupError = 0
         
         # Erstelle Gruppen basierend auf den verwendeten Departments
-        $departments = @("IT", "HR", "Finance", "Sales", "Marketing")
-        $groupTypes = @("Users", "Admins", "ReadOnly")
         
         foreach ($dept in $departments) {
             try {
@@ -3874,18 +4222,14 @@ function Quick-CreateTestData {
                 Write-Log "Testgruppe '$groupName' erstellt" -Level "SUCCESS"
                 $groupSuccess++
                 
-                # Füge passende Benutzer zur Gruppe hinzu
-                $deptUsers = Get-ADUser -Filter "Department -eq '$dept'" -SearchBase $targetOU -ErrorAction SilentlyContinue
-                if ($deptUsers) {
-                    foreach ($user in $deptUsers) {
-                        if ($user.SamAccountName -in $Global:CreatedUsers) {
-                            try {
-                                Add-ADGroupMember -Identity $groupName -Members $user -ErrorAction Stop
-                                Write-Log "Benutzer '$($user.SamAccountName)' zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
-                            } catch {
-                                Write-Log "Fehler beim Hinzufügen von Benutzer zu Gruppe: $($_.Exception.Message)" -Level "WARN"
-                            }
-                        }
+                # Füge die in diesem Lauf erstellten Benutzer der Abteilung hinzu (ein AD-Aufruf pro Gruppe)
+                $deptUsers = $usersByDepartment[$dept]
+                if ($deptUsers.Count -gt 0) {
+                    try {
+                        Add-ADGroupMember -Identity $groupName -Members $deptUsers.ToArray() -ErrorAction Stop
+                        Write-Log "$($deptUsers.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
+                    } catch {
+                        Write-Log "Fehler beim Hinzufügen von Benutzern zu Gruppe '$groupName': $($_.Exception.Message)" -Level "WARN"
                     }
                 }
             }
@@ -3904,14 +4248,14 @@ Testdaten erfolgreich erstellt:
 Benutzer:
 - Erstellt: $userSuccess
 - Fehler: $userError
-- Verteilt auf $($availableOUs.Count) OU(s)
+- Ziel-OU: $userOU
 
 Gruppen:
 - Erstellt: $groupSuccess  
 - Fehler: $groupError
 
-Die Benutzer wurden mit zufälligen Attributen erstellt
-und auf die verfügbaren OUs verteilt.
+Die Benutzer wurden mit zufälligen Attributen und
+zufälligen Initial-Passwörtern erstellt.
 "@
         
         [System.Windows.MessageBox]::Show($message, "Testdaten erstellt", "OK", "Information")
@@ -3921,6 +4265,119 @@ und auf die verfügbaren OUs verteilt.
         Write-Log "Fehler bei Testdaten-Erstellung: $($_.Exception.Message)" -Level "ERROR"
         Hide-Progress
     }
+}
+
+function Test-ADIdentityNotFound {
+    <#
+    .SYNOPSIS
+    Prüft, ob ein Fehler "Objekt nicht gefunden" bedeutet (Objekt existiert bereits nicht mehr)
+    #>
+    param($ErrorRecord)
+    return ($ErrorRecord -and $ErrorRecord.Exception -and $ErrorRecord.Exception.GetType().Name -eq 'ADIdentityNotFoundException')
+}
+
+function Get-OUContentOwnership {
+    <#
+    .SYNOPSIS
+    Ermittelt, welche Objekte unterhalb einer OU von diesem Tool erstellt wurden und welche nicht (Fremdobjekte)
+    #>
+    param([Parameter(Mandatory = $true)][string]$OUDistinguishedName)
+
+    $comparer = [System.StringComparer]::OrdinalIgnoreCase
+    $ownedSam = New-Object 'System.Collections.Generic.HashSet[string]' ($comparer)
+    foreach ($name in @($Global:CreatedUsers) + @($Global:CreatedServiceAccounts) + @($Global:CreatedGroups)) {
+        if ($name) { [void]$ownedSam.Add([string]$name) }
+    }
+    foreach ($name in $Global:CreatedComputers) {
+        if ($name) { [void]$ownedSam.Add(([string]$name).TrimEnd('$') + '$') }
+    }
+    $ownedOUs = New-Object 'System.Collections.Generic.HashSet[string]' ($comparer)
+    foreach ($ou in $Global:CreatedOUs) { if ($ou) { [void]$ownedOUs.Add([string]$ou) } }
+
+    $ownedLeafDNs = New-Object 'System.Collections.Generic.HashSet[string]' ($comparer)
+    $foreign = New-Object System.Collections.Generic.List[object]
+    $ownedNames = New-Object System.Collections.Generic.List[string]
+
+    # Nur lesend und auf die betroffene OU beschränkt
+    $objects = @(Get-ADObject -SearchBase $OUDistinguishedName -SearchScope Subtree -Filter * -Properties sAMAccountName -ErrorAction Stop |
+        Sort-Object { $_.DistinguishedName.Length })
+
+    foreach ($obj in $objects) {
+        $dn = [string]$obj.DistinguishedName
+        if ($comparer.Equals($dn, $OUDistinguishedName)) { continue }
+
+        $parentDn = ([regex]'(?<!\\),').Split($dn, 2)[1]
+        $sam = [string]$obj.sAMAccountName
+
+        if ($obj.ObjectClass -eq 'organizationalUnit' -and $ownedOUs.Contains($dn)) {
+            continue
+        } elseif ($sam -and $ownedSam.Contains($sam)) {
+            [void]$ownedLeafDNs.Add($dn)
+            $ownedNames.Add($sam.TrimEnd('$'))
+            if ($sam.EndsWith('$')) { $ownedNames.Add($sam) }
+        } elseif ($parentDn -and $ownedLeafDNs.Contains($parentDn)) {
+            # Unterobjekt eines Tool-Objekts (z.B. BitLocker-Recovery-Information eines Computers)
+            [void]$ownedLeafDNs.Add($dn)
+        } else {
+            $foreign.Add($obj)
+        }
+    }
+
+    return [PSCustomObject]@{
+        Foreign    = $foreign
+        OwnedNames = $ownedNames
+    }
+}
+
+function Remove-ToolCreatedOU {
+    <#
+    .SYNOPSIS
+    Löscht eine vom Tool erstellte OU. Enthält sie Objekte, die NICHT vom Tool erstellt wurden,
+    wird vor dem rekursiven Löschen explizit nachgefragt.
+    .OUTPUTS
+    'Deleted', 'NotFound' oder 'Skipped'
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Bestätigung erfolgt über GUI-Dialoge')]
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$DistinguishedName)
+
+    $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $DistinguishedName)'" -ErrorAction SilentlyContinue
+    if (-not $existingOU) {
+        Write-Log "OU '$DistinguishedName' nicht gefunden, übersprungen" -Level "WARN"
+        return 'NotFound'
+    }
+
+    $ownership = Get-OUContentOwnership -OUDistinguishedName $DistinguishedName
+    if ($ownership.Foreign.Count -gt 0) {
+        $sample = ($ownership.Foreign | Select-Object -First 5 | ForEach-Object { "- $($_.DistinguishedName)" }) -join "`n"
+        Write-Log "OU '$DistinguishedName' enthält $($ownership.Foreign.Count) Fremdobjekt(e)" -Level "WARN"
+        Set-UiBusyState -Busy $false
+        $answer = [System.Windows.MessageBox]::Show(
+            "Die OU`n$DistinguishedName`nenthält $($ownership.Foreign.Count) Objekt(e), die NICHT von diesem Tool erstellt wurden, z.B.:`n$sample`n`n" +
+            "Soll die OU trotzdem INKLUSIVE dieser Objekte gelöscht werden?`n(Nein = OU wird übersprungen)",
+            "Fremdobjekte in OU gefunden", "YesNo", "Warning", "No")
+        Set-UiBusyState -Busy $true
+        if ($answer -ne "Yes") {
+            Write-Log "OU '$DistinguishedName' wegen Fremdobjekten übersprungen" -Level "WARN"
+            return 'Skipped'
+        }
+        Write-Log "Löschen der OU '$DistinguishedName' inkl. Fremdobjekten vom Benutzer bestätigt" -Level "WARN"
+    }
+
+    # Schutz vor versehentlichem Löschen entfernen und OU rekursiv löschen
+    Set-ADOrganizationalUnit -Identity $DistinguishedName -ProtectedFromAccidentalDeletion $false -ErrorAction Stop
+    Remove-ADOrganizationalUnit -Identity $DistinguishedName -Recursive -Confirm:$false -ErrorAction Stop
+
+    # Mitgelöschte Tool-Objekte aus den Nachverfolgungslisten entfernen
+    foreach ($name in $ownership.OwnedNames) {
+        foreach ($list in @($Global:CreatedUsers, $Global:CreatedServiceAccounts, $Global:CreatedGroups, $Global:CreatedComputers)) {
+            while ($list.Remove($name)) { }
+        }
+    }
+    foreach ($ou in @($Global:CreatedOUs)) {
+        if ($ou -like "*,$DistinguishedName") { [void]$Global:CreatedOUs.Remove($ou) }
+    }
+    return 'Deleted'
 }
 
 function Remove-CreatedGroups {
@@ -3954,7 +4411,7 @@ function Remove-CreatedGroups {
         $total = $Global:CreatedGroups.Count
         
         # In umgekehrter Reihenfolge löschen (zuletzt erstellte zuerst)
-        $groupsToDelete = @($Global:CreatedGroups) | Sort-Object -Descending
+        $groupsToDelete = @(@($Global:CreatedGroups) | Sort-Object -Descending)
         
         for ($i = 0; $i -lt $groupsToDelete.Count; $i++) {
             $groupName = $groupsToDelete[$i]
@@ -3964,14 +4421,19 @@ function Remove-CreatedGroups {
                 Remove-ADGroup -Identity $groupName -Confirm:$false -ErrorAction Stop
                 Write-Log "Gruppe '$groupName' gelöscht" -Level "SUCCESS"
                 $deletedCount++
+                [void]$Global:CreatedGroups.Remove($groupName)
             } catch {
-                Write-Log "Fehler beim Löschen der Gruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
-                $errorCount++
+                if (Test-ADIdentityNotFound -ErrorRecord $_) {
+                    Write-Log "Gruppe '$groupName' existiert nicht mehr" -Level "INFO"
+                    [void]$Global:CreatedGroups.Remove($groupName)
+                } else {
+                    Write-Log "Fehler beim Löschen der Gruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
+                    $errorCount++
+                }
             }
         }
         
-        # Liste leeren
-        $Global:CreatedGroups.Clear()
+        # Nicht gelöschte Gruppen bleiben in der Liste, damit sie erneut bereinigt werden können
         
         Hide-Progress
         Update-Statistics
@@ -4016,22 +4478,29 @@ function Remove-CreatedComputers {
         $errorCount = 0
         $total = $Global:CreatedComputers.Count
         
-        for ($i = 0; $i -lt $Global:CreatedComputers.Count; $i++) {
-            $computerName = $Global:CreatedComputers[$i]
+        $computersToDelete = @($Global:CreatedComputers)
+        for ($i = 0; $i -lt $computersToDelete.Count; $i++) {
+            $computerName = $computersToDelete[$i]
             Update-Progress -Current ($i + 1) -Total $total -Text "Lösche Computer: $computerName"
             
             try {
-                Remove-ADComputer -Identity $computerName -Confirm:$false -ErrorAction Stop
+                # Recursive: entfernt auch vom Tool angelegte Unterobjekte (z.B. BitLocker-Recovery-Informationen)
+                Get-ADComputer -Identity $computerName -ErrorAction Stop | Remove-ADObject -Recursive -Confirm:$false -ErrorAction Stop
                 Write-Log "Computer '$computerName' gelöscht" -Level "SUCCESS"
                 $deletedCount++
+                [void]$Global:CreatedComputers.Remove($computerName)
             } catch {
-                Write-Log "Fehler beim Löschen des Computers '$computerName': $($_.Exception.Message)" -Level "ERROR"
-                $errorCount++
+                if (Test-ADIdentityNotFound -ErrorRecord $_) {
+                    Write-Log "Computer '$computerName' existiert nicht mehr" -Level "INFO"
+                    [void]$Global:CreatedComputers.Remove($computerName)
+                } else {
+                    Write-Log "Fehler beim Löschen des Computers '$computerName': $($_.Exception.Message)" -Level "ERROR"
+                    $errorCount++
+                }
             }
         }
         
-        # Liste leeren
-        $Global:CreatedComputers.Clear()
+        # Nicht gelöschte Computer bleiben in der Liste
         
         Hide-Progress
         Update-Statistics
@@ -4075,9 +4544,10 @@ function Remove-CreatedOUs {
         
         $deletedCount = 0
         $errorCount = 0
+        $skippedCount = 0
         
         # Sortiere OUs nach Tiefe (tiefste zuerst)
-        $ousToDelete = @($Global:CreatedOUs) | Sort-Object { ($_ -split ',').Count } -Descending
+        $ousToDelete = @(@($Global:CreatedOUs) | Sort-Object { ($_ -split ',').Count } -Descending)
         $total = $ousToDelete.Count
         
         for ($i = 0; $i -lt $ousToDelete.Count; $i++) {
@@ -4085,17 +4555,16 @@ function Remove-CreatedOUs {
             Update-Progress -Current ($i + 1) -Total $total -Text "Lösche OU: $ou"
             
             try {
-                $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$ou'" -ErrorAction SilentlyContinue
-                if ($existingOU) {
-                    # Schutz vor versehentlichem Löschen entfernen
-                    Set-ADOrganizationalUnit -Identity $ou -ProtectedFromAccidentalDeletion $false -ErrorAction Stop
-                    
-                    # OU löschen (rekursiv)
-                    Remove-ADOrganizationalUnit -Identity $ou -Recursive -Confirm:$false -ErrorAction Stop
-                    Write-Log "OU '$ou' und alle enthaltenen Objekte gelöscht" -Level "SUCCESS"
-                    $deletedCount++
-                } else {
-                    Write-Log "OU '$ou' nicht gefunden, übersprungen" -Level "WARN"
+                # Nur vom Tool erstellte OUs; bei Fremdobjekten wird explizit nachgefragt
+                $status = Remove-ToolCreatedOU -DistinguishedName $ou
+                switch ($status) {
+                    'Deleted' {
+                        Write-Log "OU '$ou' und alle enthaltenen Objekte gelöscht" -Level "SUCCESS"
+                        $deletedCount++
+                        [void]$Global:CreatedOUs.Remove($ou)
+                    }
+                    'NotFound' { [void]$Global:CreatedOUs.Remove($ou) }
+                    default { $skippedCount++ }
                 }
             } catch {
                 Write-Log "Fehler beim Löschen der OU '$ou': $($_.Exception.Message)" -Level "ERROR"
@@ -4103,13 +4572,12 @@ function Remove-CreatedOUs {
             }
         }
         
-        # Liste leeren
-        $Global:CreatedOUs.Clear()
+        # Übersprungene/fehlgeschlagene OUs bleiben in der Liste
         
         Hide-Progress
         Update-Statistics
         
-        $message = "OU-Löschung abgeschlossen:`n`nGelöscht: $deletedCount`nFehler: $errorCount"
+        $message = "OU-Löschung abgeschlossen:`n`nGelöscht: $deletedCount`nÜbersprungen: $skippedCount`nFehler: $errorCount"
         [System.Windows.MessageBox]::Show($message, "Abgeschlossen", "OK", "Information")
         
     } catch {
@@ -4149,22 +4617,28 @@ function Remove-CreatedServiceAccounts {
         $errorCount = 0
         $total = $Global:CreatedServiceAccounts.Count
         
-        for ($i = 0; $i -lt $Global:CreatedServiceAccounts.Count; $i++) {
-            $accountName = $Global:CreatedServiceAccounts[$i]
+        $accountsToDelete = @($Global:CreatedServiceAccounts)
+        for ($i = 0; $i -lt $accountsToDelete.Count; $i++) {
+            $accountName = $accountsToDelete[$i]
             Update-Progress -Current ($i + 1) -Total $total -Text "Lösche Service Account: $accountName"
             
             try {
                 Remove-ADUser -Identity $accountName -Confirm:$false -ErrorAction Stop
                 Write-Log "Service Account '$accountName' gelöscht" -Level "SUCCESS"
                 $deletedCount++
+                [void]$Global:CreatedServiceAccounts.Remove($accountName)
             } catch {
-                Write-Log "Fehler beim Löschen des Service Accounts '$accountName': $($_.Exception.Message)" -Level "ERROR"
-                $errorCount++
+                if (Test-ADIdentityNotFound -ErrorRecord $_) {
+                    Write-Log "Service Account '$accountName' existiert nicht mehr" -Level "INFO"
+                    [void]$Global:CreatedServiceAccounts.Remove($accountName)
+                } else {
+                    Write-Log "Fehler beim Löschen des Service Accounts '$accountName': $($_.Exception.Message)" -Level "ERROR"
+                    $errorCount++
+                }
             }
         }
         
-        # Liste leeren
-        $Global:CreatedServiceAccounts.Clear()
+        # Nicht gelöschte Service Accounts bleiben in der Liste
         
         Hide-Progress
         Update-Statistics
@@ -4184,7 +4658,9 @@ function Quick-CleanupAll {
         Write-Log "Starte Bereinigung..." -Level "INFO"
 
         $result = [System.Windows.MessageBox]::Show(
-            "WARNUNG: Dies löscht alle erstellten Gruppen, Computer, OUs und Service-Accounts!`n`n(Benutzer werden NICHT gelöscht)`n`nMöchten Sie fortfahren?",
+            "WARNUNG: Dies löscht alle von diesem Tool erstellten Gruppen, Computer, Test-OUs und Service-Accounts!`n`n" +
+            "(Benutzer werden NICHT einzeln gelöscht - vom Tool erstellte Benutzer innerhalb gelöschter Test-OUs werden jedoch mit entfernt.`n" +
+            "Enthält eine OU fremde Objekte, wird vorher separat nachgefragt.)`n`nMöchten Sie fortfahren?",
             "Bereinigung",
             "YesNo",
             "Warning"
@@ -4211,14 +4687,15 @@ function Quick-CleanupAll {
                 $currentItem++
                 try {
                     # Prüfe ob Gruppe existiert
-                    $existingGroup = Get-ADGroup -Filter "Name -eq '$group'" -ErrorAction SilentlyContinue
+                    $existingGroup = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $group)'" -ErrorAction SilentlyContinue
                     if ($existingGroup) {
-                        Remove-ADGroup -Identity $group -Confirm:$false -ErrorAction Stop
+                        Remove-ADGroup -Identity $existingGroup.DistinguishedName -Confirm:$false -ErrorAction Stop
                         Write-Log "Gruppe '$group' gelöscht" -Level "SUCCESS"
                         $successCount++
                     } else {
                         Write-Log "Gruppe '$group' existiert nicht mehr" -Level "DEBUG"
                     }
+                    [void]$Global:CreatedGroups.Remove($group)
                 }
                 catch {
                     Write-Log "Fehler beim Löschen von Gruppe '$group': $($_.Exception.Message)" -Level "ERROR"
@@ -4226,7 +4703,6 @@ function Quick-CleanupAll {
                 }
                 Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Gruppe: $group"
             }
-            $Global:CreatedGroups.Clear()
         }
 
         # Computer löschen
@@ -4237,12 +4713,14 @@ function Quick-CleanupAll {
             foreach ($computer in $computersToDelete) {
                 $currentItem++
                 try {
-                    $existingComputer = Get-ADComputer -Filter "Name -eq '$computer'" -ErrorAction SilentlyContinue
+                    $existingComputer = Get-ADComputer -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $computer)'" -ErrorAction SilentlyContinue
                     if ($existingComputer) {
-                        Remove-ADComputer -Identity $computer -Confirm:$false -ErrorAction Stop
+                        # Recursive: entfernt auch vom Tool angelegte BitLocker-Recovery-Unterobjekte
+                        Remove-ADObject -Identity $existingComputer.DistinguishedName -Recursive -Confirm:$false -ErrorAction Stop
                         Write-Log "Computer '$computer' gelöscht" -Level "SUCCESS"
                         $successCount++
                     }
+                    [void]$Global:CreatedComputers.Remove($computer)
                 }
                 catch {
                     Write-Log "Fehler beim Löschen von Computer '$computer': $($_.Exception.Message)" -Level "ERROR"
@@ -4250,7 +4728,6 @@ function Quick-CleanupAll {
                 }
                 Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Computer: $computer"
             }
-            $Global:CreatedComputers.Clear()
         }
 
         # Service-Accounts löschen
@@ -4261,12 +4738,13 @@ function Quick-CleanupAll {
             foreach ($serviceAccount in $serviceAccountsToDelete) {
                 $currentItem++
                 try {
-                    $existingAccount = Get-ADUser -Filter "SamAccountName -eq '$serviceAccount'" -ErrorAction SilentlyContinue
+                    $existingAccount = Get-ADUser -Filter "SamAccountName -eq '$(ConvertTo-ADFilterValue -Value $serviceAccount)'" -ErrorAction SilentlyContinue
                     if ($existingAccount) {
-                        Remove-ADUser -Identity $serviceAccount -Confirm:$false -ErrorAction Stop
+                        Remove-ADUser -Identity $existingAccount.DistinguishedName -Confirm:$false -ErrorAction Stop
                         Write-Log "Service-Account '$serviceAccount' gelöscht" -Level "SUCCESS"
                         $successCount++
                     }
+                    [void]$Global:CreatedServiceAccounts.Remove($serviceAccount)
                 }
                 catch {
                     Write-Log "Fehler beim Löschen von Service-Account '$serviceAccount': $($_.Exception.Message)" -Level "ERROR"
@@ -4274,7 +4752,6 @@ function Quick-CleanupAll {
                 }
                 Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Service-Account: $serviceAccount"
             }
-            $Global:CreatedServiceAccounts.Clear()
         }
 
         # OUs löschen (in umgekehrter Reihenfolge für Hierarchien)
@@ -4282,27 +4759,29 @@ function Quick-CleanupAll {
             Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche OUs..."
             
             # Sortiere OUs nach Tiefe (tiefste zuerst)
-            $ousToDelete = @($Global:CreatedOUs) | Sort-Object { ($_ -split ',').Count } -Descending
+            $ousToDelete = @(@($Global:CreatedOUs) | Sort-Object { ($_ -split ',').Count } -Descending)
             
             foreach ($ou in $ousToDelete) {
                 $currentItem++
                 try {
                     # Prüfe ob es eine Test-OU ist (USERS, GROUPS, etc.)
                     $ouName = ($ou -split ',')[0] -replace 'OU=', ''
-                    $isTestOU = $ouName -in @('USERS', 'GROUPS', 'COMPUTERS', 'SERVICES', 'RESOURCES', 'USERS', 'USER', 'COMPUTER', 'SERVICE', 'RESOURCE')
+                    $isTestOU = $ouName -in @('USERS', 'GROUPS', 'COMPUTERS', 'SERVICES', 'RESOURCES', 'USER', 'COMPUTER', 'SERVICE', 'RESOURCE')
                     
                     if (-not $isTestOU) {
+                        # Bleibt in der Liste und kann über "OUs löschen" entfernt werden
                         Write-Log "OU '$ou' ist keine Test-OU, überspringe..." -Level "DEBUG"
                         continue
                     }
                     
-                    $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$ou'" -ErrorAction SilentlyContinue
-                    if ($existingOU) {
-                        # Schutz vor versehentlichem Löschen entfernen
-                        Set-ADOrganizationalUnit -Identity $ou -ProtectedFromAccidentalDeletion $false -ErrorAction Stop
-                        Remove-ADOrganizationalUnit -Identity $ou -Confirm:$false -Recursive -ErrorAction Stop
+                    # Nur vom Tool erstellte OUs; bei Fremdobjekten wird explizit nachgefragt
+                    $status = Remove-ToolCreatedOU -DistinguishedName $ou
+                    if ($status -eq 'Deleted') {
                         Write-Log "OU '$ou' gelöscht" -Level "SUCCESS"
                         $successCount++
+                    }
+                    if ($status -ne 'Skipped') {
+                        [void]$Global:CreatedOUs.Remove($ou)
                     }
                 }
                 catch {
@@ -4311,7 +4790,6 @@ function Quick-CleanupAll {
                 }
                 Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche OU: $($ou -split ',' | Select-Object -First 1)"
             }
-            $Global:CreatedOUs.Clear()
         }
 
         Hide-Progress
@@ -4375,33 +4853,44 @@ function Create-AutomaticGroups {
         
         Show-Progress -Text "Analysiere Benutzerattribute..."
         
-        # Sammle einzigartige Werte aus Benutzerattributen
-        $departments = @()
-        $locations = @()
-        $jobTitles = @()
+        # Sammle Benutzer je Attributwert (einmalige AD-Abfrage pro Benutzer, keine erneuten Suchen pro Gruppe)
+        $comparer = [System.StringComparer]::OrdinalIgnoreCase
+        $usersByDepartment = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[string]]' ($comparer)
+        $usersByLocation = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[string]]' ($comparer)
+        $usersByJobTitle = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[string]]' ($comparer)
         
-        foreach ($userName in $Global:CreatedUsers) {
+        $addToIndex = {
+            param($Index, [string]$Key, [string]$Sam)
+            if ([string]::IsNullOrWhiteSpace($Key)) { return }
+            if (-not $Index.ContainsKey($Key)) { $Index[$Key] = New-Object System.Collections.Generic.List[string] }
+            $Index[$Key].Add($Sam)
+        }
+        
+        $userIndex = 0
+        $userTotal = $Global:CreatedUsers.Count
+        foreach ($userName in @($Global:CreatedUsers)) {
+            $userIndex++
             try {
                 $user = Get-ADUser -Identity $userName -Properties Department, City, Title -ErrorAction Stop
                 
-                if ($createDepartmentGroups -and $user.Department) {
-                    $departments += $user.Department
-                }
-                if ($createLocationGroups -and $user.City) {
-                    $locations += $user.City
-                }
-                if ($createJobTitleGroups -and $user.Title) {
-                    $jobTitles += $user.Title
-                }
+                if ($createDepartmentGroups) { & $addToIndex $usersByDepartment $user.Department $user.SamAccountName }
+                if ($createLocationGroups) { & $addToIndex $usersByLocation $user.City $user.SamAccountName }
+                if ($createJobTitleGroups) { & $addToIndex $usersByJobTitle $user.Title $user.SamAccountName }
             } catch {
                 Write-Log "Fehler beim Abrufen der Attribute für Benutzer '$userName': $($_.Exception.Message)" -Level "WARN"
+            }
+            if ($userIndex % 25 -eq 0) {
+                Update-Progress -Current $userIndex -Total $userTotal -Text "Analysiere Benutzerattribute ($userIndex/$userTotal)..."
             }
         }
         
         # Einzigartige Werte extrahieren
-        $uniqueDepartments = $departments | Select-Object -Unique | Where-Object { $_ }
-        $uniqueLocations = $locations | Select-Object -Unique | Where-Object { $_ }
-        $uniqueJobTitles = $jobTitles | Select-Object -Unique | Where-Object { $_ }
+        $uniqueDepartments = @($usersByDepartment.Keys)
+        $uniqueLocations = @($usersByLocation.Keys)
+        $uniqueJobTitles = @($usersByJobTitle.Keys)
+        
+        # Gruppennamen von unzulässigen Zeichen bereinigen
+        $toGroupName = { param([string]$Prefix, [string]$Value) "$Prefix$($Value -replace '[^\w\-\.]', '_')" }
         
         $totalGroups = $uniqueDepartments.Count + $uniqueLocations.Count + $uniqueJobTitles.Count
         $currentGroup = 0
@@ -4414,12 +4903,12 @@ function Create-AutomaticGroups {
                 $currentGroup++
                 Update-Progress -Current $currentGroup -Total $totalGroups -Text "Erstelle Abteilungsgruppe: $dept"
                 
-                $groupName = "DEPT_$($dept -replace '\s', '_')"
+                $groupName = & $toGroupName "DEPT_" $dept
                 $groupDescription = "Abteilung: $dept"
                 
                 try {
                     # Prüfe ob Gruppe bereits existiert
-                    $existingGroup = Get-ADGroup -Filter "Name -eq '$groupName'" -ErrorAction SilentlyContinue
+                    $existingGroup = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $groupName)'" -ErrorAction SilentlyContinue
                     if (-not $existingGroup) {
                         New-ADGroup -Name $groupName `
                             -GroupScope Global `
@@ -4432,13 +4921,13 @@ function Create-AutomaticGroups {
                         Write-Log "Abteilungsgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
                         
                         # Füge Benutzer der Gruppe hinzu
-                        $usersInDept = Get-ADUser -Filter "Department -eq '$dept'" | Where-Object { $_.SamAccountName -in $Global:CreatedUsers }
-                        foreach ($user in $usersInDept) {
+                        $usersInDept = $usersByDepartment[$dept]
+                        if ($usersInDept.Count -gt 0) {
                             try {
-                                Add-ADGroupMember -Identity $groupName -Members $user -ErrorAction Stop
-                                Write-Log "Benutzer '$($user.SamAccountName)' zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
+                                Add-ADGroupMember -Identity $groupName -Members $usersInDept.ToArray() -ErrorAction Stop
+                                Write-Log "$($usersInDept.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
                             } catch {
-                                Write-Log "Fehler beim Hinzufügen von '$($user.SamAccountName)' zu '$groupName': $($_.Exception.Message)" -Level "WARN"
+                                Write-Log "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
                             }
                         }
                         
@@ -4459,11 +4948,11 @@ function Create-AutomaticGroups {
                 $currentGroup++
                 Update-Progress -Current $currentGroup -Total $totalGroups -Text "Erstelle Standortgruppe: $location"
                 
-                $groupName = "LOC_$($location -replace '\s', '_')"
+                $groupName = & $toGroupName "LOC_" $location
                 $groupDescription = "Standort: $location"
                 
                 try {
-                    $existingGroup = Get-ADGroup -Filter "Name -eq '$groupName'" -ErrorAction SilentlyContinue
+                    $existingGroup = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $groupName)'" -ErrorAction SilentlyContinue
                     if (-not $existingGroup) {
                         New-ADGroup -Name $groupName `
                             -GroupScope Global `
@@ -4476,13 +4965,13 @@ function Create-AutomaticGroups {
                         Write-Log "Standortgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
                         
                         # Füge Benutzer der Gruppe hinzu
-                        $usersInLocation = Get-ADUser -Filter "City -eq '$location'" | Where-Object { $_.SamAccountName -in $Global:CreatedUsers }
-                        foreach ($user in $usersInLocation) {
+                        $usersInLocation = $usersByLocation[$location]
+                        if ($usersInLocation.Count -gt 0) {
                             try {
-                                Add-ADGroupMember -Identity $groupName -Members $user -ErrorAction Stop
-                                Write-Log "Benutzer '$($user.SamAccountName)' zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
+                                Add-ADGroupMember -Identity $groupName -Members $usersInLocation.ToArray() -ErrorAction Stop
+                                Write-Log "$($usersInLocation.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
                             } catch {
-                                Write-Log "Fehler beim Hinzufügen von '$($user.SamAccountName)' zu '$groupName': $($_.Exception.Message)" -Level "WARN"
+                                Write-Log "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
                             }
                         }
                         
@@ -4503,11 +4992,11 @@ function Create-AutomaticGroups {
                 $currentGroup++
                 Update-Progress -Current $currentGroup -Total $totalGroups -Text "Erstelle Berufsgruppe: $title"
                 
-                $groupName = "JOB_$($title -replace '\s', '_')"
+                $groupName = & $toGroupName "JOB_" $title
                 $groupDescription = "Berufsbezeichnung: $title"
                 
                 try {
-                    $existingGroup = Get-ADGroup -Filter "Name -eq '$groupName'" -ErrorAction SilentlyContinue
+                    $existingGroup = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $groupName)'" -ErrorAction SilentlyContinue
                     if (-not $existingGroup) {
                         New-ADGroup -Name $groupName `
                             -GroupScope Global `
@@ -4520,13 +5009,13 @@ function Create-AutomaticGroups {
                         Write-Log "Berufsgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
                         
                         # Füge Benutzer der Gruppe hinzu
-                        $usersWithTitle = Get-ADUser -Filter "Title -eq '$title'" | Where-Object { $_.SamAccountName -in $Global:CreatedUsers }
-                        foreach ($user in $usersWithTitle) {
+                        $usersWithTitle = $usersByJobTitle[$title]
+                        if ($usersWithTitle.Count -gt 0) {
                             try {
-                                Add-ADGroupMember -Identity $groupName -Members $user -ErrorAction Stop
-                                Write-Log "Benutzer '$($user.SamAccountName)' zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
+                                Add-ADGroupMember -Identity $groupName -Members $usersWithTitle.ToArray() -ErrorAction Stop
+                                Write-Log "$($usersWithTitle.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
                             } catch {
-                                Write-Log "Fehler beim Hinzufügen von '$($user.SamAccountName)' zu '$groupName': $($_.Exception.Message)" -Level "WARN"
+                                Write-Log "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
                             }
                         }
                         
@@ -4574,7 +5063,8 @@ function Create-NestedGroupStructure {
         }
         
         $hierarchyType = $selectedHierarchy.Content
-        $nestSecurity = $Global:GuiControls.CheckBoxNestedSecurity.IsChecked
+        # Standard: Sicherheitsgruppen (CheckBox ist optional und in der aktuellen Oberfläche nicht vorhanden)
+        $nestSecurity = if ($null -ne $Global:GuiControls.CheckBoxNestedSecurity) { [bool]$Global:GuiControls.CheckBoxNestedSecurity.IsChecked } else { $true }
         
         # Bestimme Gruppen-OU
         $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
@@ -4714,8 +5204,9 @@ function Create-NestedGroupStructure {
                                 foreach ($team in $structure[$org][$dept]) {
                                     try {
                                         # Level 3: Team
+                                        # Global: eine DomainLocal-Gruppe kann nicht Mitglied einer Global-Gruppe sein
                                         New-ADGroup -Name $team `
-                                            -GroupScope DomainLocal `
+                                            -GroupScope Global `
                                             -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
                                             -Description "Team Level" `
                                             -Path $groupOU `
@@ -4965,7 +5456,7 @@ try {
 }
 "@
             
-            $scriptPath = ".\DynamicGroup_$groupName`_Update.ps1"
+            $scriptPath = (Get-ExportFilePath -FileName "DynamicGroup_$groupName`_Update.ps1")
             $updateScript | Out-File -FilePath $scriptPath -Encoding UTF8
             Write-Log "Update-Skript erstellt: $scriptPath" -Level "INFO"
             
@@ -5162,7 +5653,7 @@ function Create-OrganizationalUnitStructure {
                     $ouPath = "OU=$ouName,$ParentPath"
                     
                     # Prüfe ob OU bereits existiert
-                    $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$ouPath'" -ErrorAction SilentlyContinue
+                    $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $ouPath)'" -ErrorAction SilentlyContinue
                     
                     if (-not $existingOU) {
                         New-ADOrganizationalUnit -Name $ouName `
@@ -5198,7 +5689,7 @@ function Create-OrganizationalUnitStructure {
                         foreach ($subOU in $Structure[$ouName]) {
                             try {
                                 $subOUPath = "OU=$subOU,$ouPath"
-                                $existingSubOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$subOUPath'" -ErrorAction SilentlyContinue
+                                $existingSubOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $subOUPath)'" -ErrorAction SilentlyContinue
                                 
                                 if (-not $existingSubOU) {
                                     New-ADOrganizationalUnit -Name $subOU `
@@ -5268,7 +5759,7 @@ function Create-OrganizationalUnitStructure {
         Update-Statistics
         
         # Erstelle Dokumentation
-        $docPath = ".\OU_Structure_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+        $docPath = (Get-ExportFilePath -FileName "OU_Structure_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
         $documentation = @"
 OU-Struktur Dokumentation
 ========================
@@ -5323,7 +5814,7 @@ function Create-ComputerObjects {
         if ([string]::IsNullOrWhiteSpace($computerCount)) {
             $computerCount = 10 # Default
         } else {
-            $computerCount = [int]$computerCount
+            $computerCount = ConvertTo-IntOrZero -Value $computerCount
         }
         
         if ($computerCount -le 0) {
@@ -5397,6 +5888,10 @@ function Create-ComputerObjects {
                 } else {
                     "$prefix-$('{0:D4}' -f $i)"
                 }
+                # NetBIOS-Computernamen sind auf 15 Zeichen begrenzt
+                if ($computerName.Length -gt 15) {
+                    $computerName = "$prefix-$loc$dept$num"
+                }
                 
                 # Erstelle Computer
                 $computerParams = @{
@@ -5408,13 +5903,12 @@ function Create-ComputerObjects {
                     OperatingSystemVersion = "10.0 (22621)"
                     Description = "$type - Created $(Get-Date -Format 'yyyy-MM-dd')"
                     Location = if ($randomNames) { $locations | Get-Random } else { "Main Office" }
-                    ManagedBy = $null
                 }
                 
                 # Zusätzliche Attribute für Server
                 if ($type -eq "Server") {
                     $computerParams.OperatingSystemServicePack = "21H2"
-                    $computerParams.DNSHostName = "$computerName.$((Get-ADDomain).DNSRoot)"
+                    $computerParams.DNSHostName = "$computerName.$((Get-CachedADDomain).DNSRoot)"
                 }
                 
                 New-ADComputer @computerParams -ErrorAction Stop
@@ -5471,7 +5965,8 @@ function Create-ServiceAccounts {
         if ([string]::IsNullOrWhiteSpace($accountCount)) {
             $accountCount = 5 # Default
         } else {
-            $accountCount = [int]$accountCount
+            $parsedCount = 0
+            $accountCount = if ([int]::TryParse(([string]$accountCount).Trim(), [ref]$parsedCount)) { $parsedCount } else { 0 }
         }
         
         if ($accountCount -le 0) {
@@ -5537,7 +6032,7 @@ function Create-ServiceAccounts {
         }
         
         $config = $serviceConfig[$type]
-        $domain = (Get-ADDomain).DNSRoot
+        $domain = (Get-CachedADDomain).DNSRoot
         
         for ($i = 1; $i -le $accountCount; $i++) {
             try {
@@ -5555,24 +6050,23 @@ function Create-ServiceAccounts {
                     CannotChangePassword = $true
                     Description = "$($config.Description) - Created $(Get-Date -Format 'yyyy-MM-dd')"
                     DisplayName = "$type Service Account $i"
-                    AccountPassword = (ConvertTo-SecureString -String (Generate-SecurePassword -Complexity "Hochsicher (20+ Zeichen)") -AsPlainText -Force)
-                    ServicePrincipalNames = @()
+                    AccountPassword = (New-RandomSecurePassword -Complexity "Hochsicher (20+ Zeichen)")
                 }
                 
-                # Füge SPNs hinzu wenn vorhanden
+                # Füge SPNs hinzu wenn vorhanden (Hostname je Account eindeutig, um doppelte SPNs zu vermeiden)
                 if ($config.SPNs.Count -gt 0) {
-                    $spns = @()
+                    $spns = New-Object System.Collections.Generic.List[string]
+                    $hostname = "$($accountName -replace '_', '-').$domain"
                     foreach ($spnPrefix in $config.SPNs) {
-                        $hostname = "server$(Get-Random -Minimum 1 -Maximum 99).$domain"
-                        $spns += "$spnPrefix$hostname"
+                        $spns.Add("$spnPrefix$hostname")
                         if ($spnPrefix -eq "HTTP/") {
-                            $spns += "$spnPrefix$hostname:80"
-                            $spns += "$spnPrefix$hostname:443"
+                            $spns.Add("$spnPrefix${hostname}:80")
+                            $spns.Add("$spnPrefix${hostname}:443")
                         } elseif ($spnPrefix -eq "MSSQLSvc/") {
-                            $spns += "$spnPrefix$hostname:1433"
+                            $spns.Add("$spnPrefix${hostname}:1433")
                         }
                     }
-                    $serviceParams.ServicePrincipalNames = $spns
+                    $serviceParams.ServicePrincipalNames = $spns.ToArray()
                 }
                 
                 New-ADUser @serviceParams -ErrorAction Stop
@@ -5628,7 +6122,7 @@ function Create-PrinterObjects {
         if ([string]::IsNullOrWhiteSpace($printerCount)) {
             $printerCount = 3 # Default
         } else {
-            $printerCount = [int]$printerCount
+            $printerCount = ConvertTo-IntOrZero -Value $printerCount
         }
         
         if ($printerCount -le 0) {
@@ -5784,7 +6278,7 @@ function Create-ComputerBitLockerData {
         if ([string]::IsNullOrWhiteSpace($computerCount)) {
             $computerCount = $Global:CreatedComputers.Count
         } else {
-            $computerCount = [int]$computerCount
+            $computerCount = ConvertTo-IntOrZero -Value $computerCount
             if ($computerCount -gt $Global:CreatedComputers.Count) {
                 $computerCount = $Global:CreatedComputers.Count
                 Write-Log "Anzahl auf verfügbare Computer reduziert: $computerCount" -Level "INFO"
@@ -5810,15 +6304,18 @@ function Create-ComputerBitLockerData {
         Show-Progress -Text "Erstelle BitLocker Recovery Keys..."
         
         # Computer auswählen
-        $selectedComputers = if ($randomSelection) {
+        # @() erzwingt ein Array - bei nur einem Computer würde sonst ein String indiziert (einzelnes Zeichen)
+        $selectedComputers = @(if ($randomSelection) {
             $Global:CreatedComputers | Get-Random -Count $computerCount
         } else {
             $Global:CreatedComputers | Select-Object -First $computerCount
-        }
+        })
         
         $successCount = 0
         $errorCount = 0
-        $bitlockerData = @()
+        $bitlockerData = New-Object System.Collections.Generic.List[object]
+        $exportPath = $null
+        $docPath = $null
         
         for ($i = 0; $i -lt $selectedComputers.Count; $i++) {
             $computer = $selectedComputers[$i]
@@ -5829,10 +6326,13 @@ function Create-ComputerBitLockerData {
                 $recoveryGuid = [System.Guid]::NewGuid()
                 $recoveryPassword = Generate-BitLockerRecoveryPassword
                 $recoveryId = $recoveryPassword.Substring(0, 8)
-                $tpmKeyHash = [System.Guid]::NewGuid().ToString('N').Substring(0, 40).ToUpper()
+                # 40 Hex-Zeichen (20 Zufallsbytes) - eine GUID hat nur 32 Hex-Zeichen
+                $tpmBytes = New-Object byte[] 20
+                $script:CryptoRng.GetBytes($tpmBytes)
+                $tpmKeyHash = ([System.BitConverter]::ToString($tpmBytes) -replace '-', '').ToUpper()
                 
                 # Hole Computer-Objekt
-                $computerObj = Get-ADComputer -Identity $computer -Properties * -ErrorAction Stop
+                $computerObj = Get-ADComputer -Identity $computer -ErrorAction Stop
                 
                 # Simuliere verschiedene BitLocker-Attribute
                 $bitlockerAttributes = @{
@@ -5845,28 +6345,24 @@ function Create-ComputerBitLockerData {
                 
                 # Versuche msFVE-RecoveryInformation zu erstellen (benötigt spezielle Rechte)
                 try {
-                    $recoveryDN = "CN=$recoveryGuid,$($computerObj.DistinguishedName)"
-                    
                     New-ADObject -Name $recoveryGuid.ToString() `
                         -Type 'msFVE-RecoveryInformation' `
                         -Path $computerObj.DistinguishedName `
                         -OtherAttributes @{
-                            'msFVE-RecoveryGuid' = $recoveryGuid.ToString('B')
+                            'msFVE-RecoveryGuid' = $recoveryGuid.ToByteArray()
                             'msFVE-RecoveryPassword' = $recoveryPassword
-                            'msFVE-VolumeGuid' = [System.Guid]::NewGuid().ToString('B')
-                            'msFVE-RecoveryInformationIdentifier' = "TPM and PIN"
-                            'whenCreated' = Get-Date
+                            'msFVE-VolumeGuid' = [System.Guid]::NewGuid().ToByteArray()
                         } `
                         -ErrorAction Stop
                     
                     Write-Log "BitLocker Recovery-Objekt für '$computer' erstellt" -Level "DEBUG"
                 } catch {
                     # Fallback wenn keine Rechte für msFVE-RecoveryInformation
-                    Write-Log "Konnte msFVE-RecoveryInformation nicht erstellen (Rechte fehlen), verwende Fallback" -Level "DEBUG"
+                    Write-Log "Konnte msFVE-RecoveryInformation für '$computer' nicht erstellen (Rechte/Schema), verwende Fallback: $($_.Exception.Message)" -Level "DEBUG"
                 }
                 
                 # Speichere Daten für Export
-                $bitlockerData += [PSCustomObject]@{
+                $bitlockerData.Add([PSCustomObject]@{
                     ComputerName = $computer
                     RecoveryID = $recoveryId
                     RecoveryPassword = $recoveryPassword
@@ -5876,7 +6372,7 @@ function Create-ComputerBitLockerData {
                     ProtectionStatus = "Enabled"
                     VolumeType = "OperatingSystem"
                     CreatedDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                }
+                })
                 
                 $successCount++
                 Write-Log "BitLocker-Daten für '$computer' erstellt" -Level "SUCCESS"
@@ -5889,12 +6385,12 @@ function Create-ComputerBitLockerData {
         
         # Exportiere BitLocker-Daten
         if ($bitlockerData.Count -gt 0) {
-            $exportPath = ".\BitLocker_ComputerKeys_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+            $exportPath = Get-ExportFilePath -FileName "BitLocker_ComputerKeys_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
             $bitlockerData | Export-Csv -Path $exportPath -NoTypeInformation -Encoding UTF8
             Write-Log "BitLocker-Keys exportiert nach: $exportPath" -Level "INFO"
             
             # Erstelle zusätzliche Dokumentation
-            $docPath = ".\BitLocker_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+            $docPath = Get-ExportFilePath -FileName "BitLocker_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
             $documentation = @"
 BitLocker Recovery Keys Dokumentation
 =====================================
@@ -5974,7 +6470,7 @@ function Create-LAPSData {
         }
         
         # Systeme filtern
-        $eligibleSystems = @()
+        $eligibleSystems = New-Object System.Collections.Generic.List[object]
         foreach ($computer in $Global:CreatedComputers) {
             try {
                 $compObj = Get-ADComputer -Identity $computer -Properties OperatingSystem -ErrorAction Stop
@@ -5984,11 +6480,11 @@ function Create-LAPSData {
                 $isWorkstation = $os -notlike "*Server*"
                 
                 if (($isServer -and $includeServers) -or ($isWorkstation -and $includeWorkstations)) {
-                    $eligibleSystems += @{
+                    $eligibleSystems.Add([PSCustomObject]@{
                         Name = $computer
                         Type = if ($isServer) { "Server" } else { "Workstation" }
                         OS = $os
-                    }
+                    })
                 }
             } catch {
                 Write-Log "Fehler beim Prüfen von Computer '$computer': $($_.Exception.Message)" -Level "DEBUG"
@@ -6005,7 +6501,7 @@ function Create-LAPSData {
         if ([string]::IsNullOrWhiteSpace($systemCount)) {
             $systemCount = $eligibleSystems.Count
         } else {
-            $systemCount = [int]$systemCount
+            $systemCount = ConvertTo-IntOrZero -Value $systemCount
             if ($systemCount -gt $eligibleSystems.Count) {
                 $systemCount = $eligibleSystems.Count
                 Write-Log "Anzahl auf verfügbare Systeme reduziert: $systemCount" -Level "INFO"
@@ -6021,8 +6517,8 @@ function Create-LAPSData {
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie LAPS-Passwörter für $systemCount Systeme erstellen?`n`n" +
             "Verfügbare Systeme: $($eligibleSystems.Count)`n" +
-            "Server: $(($eligibleSystems | Where-Object { $_.Type -eq 'Server' }).Count)`n" +
-            "Workstations: $(($eligibleSystems | Where-Object { $_.Type -eq 'Workstation' }).Count)",
+            "Server: $(@($eligibleSystems | Where-Object { $_.Type -eq 'Server' }).Count)`n" +
+            "Workstations: $(@($eligibleSystems | Where-Object { $_.Type -eq 'Workstation' }).Count)",
             "LAPS-Passwörter erstellen",
             "YesNo",
             "Question"
@@ -6033,14 +6529,14 @@ function Create-LAPSData {
         Show-Progress -Text "Erstelle LAPS-Passwörter..."
         
         # Systeme auswählen
-        $selectedSystems = $eligibleSystems | Get-Random -Count $systemCount
+        # @() erzwingt ein Array (bei genau einem System sonst kein Indexzugriff möglich)
+        $selectedSystems = @($eligibleSystems | Get-Random -Count $systemCount)
         
         $successCount = 0
         $errorCount = 0
-        $lapsData = @()
+        $lapsData = New-Object System.Collections.Generic.List[object]
         
         # LAPS-Passwort-Richtlinien
-        $passwordLength = 14  # Standard LAPS-Länge
         $passwordComplexity = @{
             Server = 20       # Längere Passwörter für Server
             Workstation = 14  # Standard für Workstations
@@ -6053,7 +6549,7 @@ function Create-LAPSData {
             try {
                 # Generiere LAPS-Passwort basierend auf System-Typ
                 $pwdLength = $passwordComplexity[$system.Type]
-                $lapsPassword = Generate-SecurePassword -Complexity "Komplex (16 Zeichen + Spezial)" -IncludeNumbers $true -IncludeSymbols $true -ExcludeAmbiguous $true
+                $lapsPassword = Generate-SecurePassword -Complexity "Komplex (16 Zeichen + Spezial)" -IncludeNumbers $true -IncludeSymbols $true -ExcludeAmbiguous $true -Length $pwdLength
                 
                 # Setze Ablaufdatum (Standard: 30 Tage)
                 $expirationTime = (Get-Date).AddDays(30).ToFileTimeUtc()
@@ -6081,7 +6577,7 @@ function Create-LAPSData {
                 }
                 
                 # Speichere LAPS-Daten für Export
-                $lapsData += [PSCustomObject]@{
+                $lapsData.Add([PSCustomObject]@{
                     ComputerName = $system.Name
                     SystemType = $system.Type
                     OperatingSystem = $system.OS
@@ -6091,14 +6587,14 @@ function Create-LAPSData {
                     PasswordExpiryDate = (Get-Date).AddDays(30).ToString("yyyy-MM-dd HH:mm:ss")
                     LastChangeBy = $env:USERNAME
                     Status = "Active"
-                }
+                })
                 
                 $successCount++
                 Write-Log "LAPS-Passwort für '$($system.Name)' erstellt" -Level "SUCCESS"
                 
             } catch {
                 Write-Log "Fehler bei LAPS-Passwort für '$($system.Name)': $($_.Exception.Message)" -Level "ERROR"
-                $lapsData += [PSCustomObject]@{
+                $lapsData.Add([PSCustomObject]@{
                     ComputerName = $system.Name
                     SystemType = $system.Type
                     OperatingSystem = $system.OS
@@ -6108,19 +6604,19 @@ function Create-LAPSData {
                     PasswordExpiryDate = "N/A"
                     LastChangeBy = $env:USERNAME
                     Status = "Failed: $($_.Exception.Message)"
-                }
+                })
                 $errorCount++
             }
         }
         
         # Exportiere LAPS-Daten
         if ($lapsData.Count -gt 0) {
-            $exportPath = ".\LAPS_Passwords_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+            $exportPath = (Get-ExportFilePath -FileName "LAPS_Passwords_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
             $lapsData | Export-Csv -Path $exportPath -NoTypeInformation -Encoding UTF8
             Write-Log "LAPS-Passwörter exportiert nach: $exportPath" -Level "INFO"
             
             # Erstelle LAPS-Bericht
-            $reportPath = ".\LAPS_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+            $reportPath = (Get-ExportFilePath -FileName "LAPS_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
             $report = @"
 LAPS (Local Administrator Password Solution) Bericht
 ===================================================
@@ -6135,8 +6631,8 @@ Fehler: $errorCount
 
 Systemverteilung:
 -----------------
-Server: $(($lapsData | Where-Object { $_.SystemType -eq 'Server' -and $_.Status -eq 'Active' }).Count)
-Workstations: $(($lapsData | Where-Object { $_.SystemType -eq 'Workstation' -and $_.Status -eq 'Active' }).Count)
+Server: $(@($lapsData | Where-Object { $_.SystemType -eq 'Server' -and $_.Status -eq 'Active' }).Count)
+Workstations: $(@($lapsData | Where-Object { $_.SystemType -eq 'Workstation' -and $_.Status -eq 'Active' }).Count)
 
 Passwort-Richtlinien:
 ---------------------
@@ -6254,6 +6750,10 @@ function Create-TestDataSet {
         # Erstelle Test-OU-Struktur
         Show-Progress -Text "Erstelle Test-OU-Struktur..." -Value 0
         $testOUs = Ensure-TestOUs -BaseOU $targetOU
+        $usersPath = if ($testOUs["USERS"]) { $testOUs["USERS"] } else { $targetOU }
+        $groupsPath = if ($testOUs["GROUPS"]) { $testOUs["GROUPS"] } else { $targetOU }
+        $computersPath = if ($testOUs["COMPUTERS"]) { $testOUs["COMPUTERS"] } else { $targetOU }
+        $usersByDepartment = @{}
         
         $totalObjects = $objectCounts.Users + $objectCounts.Groups + $objectCounts.Computers
         $currentObject = 0
@@ -6283,6 +6783,7 @@ function Create-TestDataSet {
         
         foreach ($dept in $departmentDistribution.Keys) {
             $deptUserCount = [math]::Round($objectCounts.Users * $departmentDistribution[$dept])
+            $usersByDepartment[$dept] = New-Object System.Collections.Generic.List[string]
             
             for ($i = 1; $i -le $deptUserCount; $i++) {
                 $currentObject++
@@ -6290,7 +6791,10 @@ function Create-TestDataSet {
                 try {
                     $firstName = Get-RandomFirstName
                     $lastName = Get-RandomLastName
-                    $samAccountName = "$($firstName.ToLower()).$($lastName.ToLower())$(Get-Random -Minimum 100 -Maximum 999)"
+                    # sAMAccountName max. 20 Zeichen, nur unkritische Zeichen
+                    $samBase = ("$firstName.$lastName".ToLower() -replace 'ä','ae' -replace 'ö','oe' -replace 'ü','ue' -replace 'ß','ss' -replace '[^a-z0-9.]','')
+                    if ($samBase.Length -gt 17) { $samBase = $samBase.Substring(0, 17) }
+                    $samAccountName = "$samBase$(Get-Random -Minimum 100 -Maximum 999)"
                     
                     # Historische Daten simulieren
                     $createdDate = if ($historicalData) {
@@ -6303,7 +6807,7 @@ function Create-TestDataSet {
                     $userParams = @{
                         Name = "$firstName $lastName"
                         SamAccountName = $samAccountName
-                        UserPrincipalName = "$samAccountName@$((Get-ADDomain).DNSRoot)"
+                        UserPrincipalName = "$samAccountName@$((Get-CachedADDomain).DNSRoot)"
                         GivenName = $firstName
                         Surname = $lastName
                         DisplayName = "$firstName $lastName"
@@ -6316,27 +6820,26 @@ function Create-TestDataSet {
                         Country = "DE"
                         OfficePhone = Get-RandomPhoneNumber
                         MobilePhone = Get-RandomPhoneNumber
-                        Path = $testOUs["USERS"]
+                        Path = $usersPath
                         Enabled = $true
-                        AccountPassword = (ConvertTo-SecureString -String (Generate-SecurePassword) -AsPlainText -Force)
+                        AccountPassword = (New-RandomSecurePassword)
                         ChangePasswordAtLogon = $false
                     }
                     
-                    # Füge historische Attribute hinzu
+                    # whenCreated ist systemverwaltet und kann nicht gesetzt werden -> historisches Datum in der Beschreibung
                     if ($historicalData) {
-                        $userParams.OtherAttributes = @{
-                            'whenCreated' = $createdDate
-                        }
+                        $userParams.Description = "Simuliertes Erstellungsdatum: $($createdDate.ToString('yyyy-MM-dd'))"
                     }
                     
                     New-ADUser @userParams -ErrorAction Stop
                     $Global:CreatedUsers.Add($samAccountName)
+                    $usersByDepartment[$dept].Add($samAccountName)
                     
                 } catch {
                     Write-Log "Fehler beim Erstellen von Testbenutzer: $($_.Exception.Message)" -Level "WARN"
                 }
                 
-                if ($currentObject % 100 -eq 0) {
+                if ($currentObject % 10 -eq 0) {
                     Update-Progress -Current $currentObject -Total $totalObjects -Text "Erstelle Objekte... ($currentObject/$totalObjects)"
                 }
             }
@@ -6353,16 +6856,16 @@ function Create-TestDataSet {
                     -GroupScope Global `
                     -GroupCategory Security `
                     -Description "$dept Department Group" `
-                    -Path $testOUs["GROUPS"] `
+                    -Path $groupsPath `
                     -ErrorAction Stop
                 
                 $Global:CreatedGroups.Add($groupName)
                 $currentObject++
                 
-                # Füge Benutzer zur Gruppe hinzu
-                $deptUsers = Get-ADUser -Filter "Department -eq '$dept'" -SearchBase $testOUs["USERS"] -ErrorAction SilentlyContinue
-                if ($deptUsers) {
-                    Add-ADGroupMember -Identity $groupName -Members $deptUsers -ErrorAction SilentlyContinue
+                # Nur die in diesem Lauf erstellten Benutzer der Abteilung hinzufügen (ohne erneute AD-Abfrage)
+                $deptUsers = $usersByDepartment[$dept]
+                if ($deptUsers -and $deptUsers.Count -gt 0) {
+                    Add-ADGroupMember -Identity $groupName -Members $deptUsers.ToArray() -ErrorAction SilentlyContinue
                 }
                 
             } catch {
@@ -6381,7 +6884,7 @@ function Create-TestDataSet {
                     -GroupScope Global `
                     -GroupCategory Security `
                     -Description "$groupType Group" `
-                    -Path $testOUs["GROUPS"] `
+                    -Path $groupsPath `
                     -ErrorAction Stop
                 
                 $Global:CreatedGroups.Add($groupName)
@@ -6426,7 +6929,7 @@ function Create-TestDataSet {
                     
                     New-ADComputer -Name $computerName `
                         -SamAccountName "$computerName`$" `
-                        -Path $testOUs["COMPUTERS"] `
+                        -Path $computersPath `
                         -Enabled $true `
                         -Description "$compType - Test Data Set" `
                         -OperatingSystem $(if ($compType -eq "Server") { "Windows Server 2022" } else { "Windows 11" }) `
@@ -6488,10 +6991,10 @@ function Activate-ChaosMode {
             "WARNUNG: Der Chaos-Modus erstellt absichtlich fehlerhafte Daten!`n`n" +
             "Dies kann zu Problemen in Ihrer Test-Umgebung führen.`n`n" +
             "Ausgewählte Optionen:`n" +
-            "$(if ($invalidData) { '- Ungültige Daten`n' })" +
-            "$(if ($missingAttributes) { '- Fehlende Attribute`n' })" +
-            "$(if ($duplicateEntries) { '- Doppelte Einträge`n' })" +
-            "$(if ($specialCharacters) { '- Sonderzeichen`n' })`n" +
+            "$(if ($invalidData) { "- Ungültige Daten`n" })" +
+            "$(if ($missingAttributes) { "- Fehlende Attribute`n" })" +
+            "$(if ($duplicateEntries) { "- Doppelte Einträge`n" })" +
+            "$(if ($specialCharacters) { "- Sonderzeichen`n" })`n" +
             "Möchten Sie wirklich fortfahren?",
             "CHAOS-MODUS WARNUNG",
             "YesNo",
@@ -6522,9 +7025,9 @@ function Activate-ChaosMode {
                         Name = "Invalid_User_$i"
                         SamAccountName = "invalid.user.$i"
                         Path = $targetOU
-                        Enabled = $true
+                        Enabled = $false # Deaktiviert, falls die Domänen-Richtlinie das zu kurze Passwort akzeptiert
                         EmailAddress = "not@valid@email@address.com"
-                        AccountPassword = (ConvertTo-SecureString -String "123" -AsPlainText -Force) # Zu kurzes Passwort
+                        AccountPassword = (New-RandomSecurePassword -Complexity "Einfach (8 Zeichen)" -Length 4) # Absichtlich zu kurzes (zufälliges) Passwort
                     }
                     
                     New-ADUser @invalidUser -ErrorAction Stop
@@ -6533,6 +7036,11 @@ function Activate-ChaosMode {
                 } catch {
                     Write-Log "Erwarteter Fehler bei ungültigen Daten: $($_.Exception.Message)" -Level "DEBUG"
                     $errorCount++
+                    # New-ADUser legt das Objekt bei abgelehntem Passwort ggf. trotzdem (deaktiviert) an -> nachverfolgen, damit es bereinigt werden kann
+                    $orphan = Get-ADUser -Filter "SamAccountName -eq '$(ConvertTo-ADFilterValue -Value $invalidUser.SamAccountName)'" -ErrorAction SilentlyContinue
+                    if ($orphan -and -not $Global:CreatedUsers.Contains($invalidUser.SamAccountName)) {
+                        $Global:CreatedUsers.Add($invalidUser.SamAccountName)
+                    }
                 }
             }
         }
@@ -6548,7 +7056,7 @@ function Activate-ChaosMode {
                         SamAccountName = "incomplete.user.$i"
                         Path = $targetOU
                         Enabled = $true
-                        AccountPassword = (ConvertTo-SecureString -String (Generate-SecurePassword) -AsPlainText -Force)
+                        AccountPassword = (New-RandomSecurePassword)
                         # Absichtlich fehlende Attribute: GivenName, Surname, DisplayName, Email
                     }
                     
@@ -6574,7 +7082,7 @@ function Activate-ChaosMode {
                         -SamAccountName $duplicateName `
                         -Path $targetOU `
                         -Enabled $true `
-                        -AccountPassword (ConvertTo-SecureString -String (Generate-SecurePassword) -AsPlainText -Force) `
+                        -AccountPassword (New-RandomSecurePassword) `
                         -ErrorAction Stop
                     
                     if ($i -eq 1) {
@@ -6616,7 +7124,7 @@ function Activate-ChaosMode {
                         -DisplayName $specialName `
                         -Path $targetOU `
                         -Enabled $true `
-                        -AccountPassword (ConvertTo-SecureString -String (Generate-SecurePassword) -AsPlainText -Force) `
+                        -AccountPassword (New-RandomSecurePassword) `
                         -ErrorAction Stop
                     
                     $Global:CreatedUsers.Add($samName)
@@ -6666,8 +7174,8 @@ function Start-PerformanceTest {
             return
         }
         
-        $objectCount = [int]$objectCount
-        $batchSize = [int]$batchSize
+        $objectCount = ConvertTo-IntOrZero -Value $objectCount
+        $batchSize = ConvertTo-IntOrZero -Value $batchSize
         
         if ($objectCount -le 0 -or $batchSize -le 0) {
             Write-Log "Ungültige Performance-Test Parameter" -Level "WARN"
@@ -6729,7 +7237,7 @@ function Start-PerformanceTest {
                         -Path $targetOU `
                         -Enabled $false `
                         -Description "Performance Test Object" `
-                        -AccountPassword (ConvertTo-SecureString -String "Test123!" -AsPlainText -Force) `
+                        -AccountPassword (New-RandomSecurePassword) `
                         -ErrorAction Stop
                     
                     $Global:CreatedUsers.Add($userName)
@@ -6766,7 +7274,7 @@ function Start-PerformanceTest {
         $objectsPerSecond = $metrics.SuccessfulObjects / $totalDuration
         
         # Erstelle Bericht
-        $reportPath = ".\PerformanceTest_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+        $reportPath = (Get-ExportFilePath -FileName "PerformanceTest_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
         $report = @"
 Active Directory Performance Test Report
 =======================================
@@ -6845,9 +7353,9 @@ function Apply-PasswordPolicies {
         
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie folgende Passwort-Richtlinien anwenden?`n`n" +
-            "$(if ($simulateHistory) { '- Passwort-Historie simulieren`n' })" +
-            "$(if ($createLocked) { "- $lockoutRatio% der Accounts sperren`n" })" +
-            "$(if ($expiredPasswords) { '- Passwörter als abgelaufen markieren`n' })" +
+            "$(if ($simulateHistory) { "- Passwort-Historie simulieren`n" })" +
+            "$(if ($createLocked) { "- $lockoutRatio% der Accounts deaktivieren (Sperre simuliert)`n" })" +
+            "$(if ($expiredPasswords) { "- Passwörter als abgelaufen markieren`n" })" +
             "`nBetroffene Benutzer: $($Global:CreatedUsers.Count)",
             "Passwort-Richtlinien anwenden",
             "YesNo",
@@ -6874,61 +7382,27 @@ function Apply-PasswordPolicies {
             try {
                 # 1. Passwort-Historie simulieren
                 if ($simulateHistory) {
-                    # Füge pwdLastSet-Attribute hinzu (simuliert mehrfache Passwortänderungen)
-                    $historyDates = @()
-                    for ($j = 1; $j -le 5; $j++) {
-                        $historyDates += (Get-Date).AddDays(-($j * 30))
-                    }
-                    
-                    # AD speichert keine echte Passwort-Historie für einzelne Benutzer,
-                    # aber wir können das letzte Passwort-Änderungsdatum setzen
-                    Set-ADUser -Identity $user -Replace @{
-                        'pwdLastSet' = 0  # Erzwingt Passwortänderung
-                    } -ErrorAction Stop
-                    
-                    # Setze es wieder zurück mit historischem Datum
-                    $fileTime = $historyDates[0].ToFileTime()
-                    Set-ADUser -Identity $user -Replace @{
-                        'pwdLastSet' = $fileTime
-                    } -ErrorAction Stop
+                    # AD erlaubt für pwdLastSet nur 0 (Änderung erzwingen) oder -1 (aktueller Zeitpunkt);
+                    # beliebige historische Zeitstempel werden vom DC abgelehnt.
+                    Set-ADUser -Identity $user -Replace @{ 'pwdLastSet' = 0 } -ErrorAction Stop
+                    Set-ADUser -Identity $user -Replace @{ 'pwdLastSet' = -1 } -ErrorAction Stop
                     
                     $historyCount++
                     Write-Log "Passwort-Historie für '$user' simuliert" -Level "DEBUG"
                 }
                 
-                # 2. Account sperren
+                # 2. Account sperren (simuliert)
                 if ($createLocked -and $lockedCount -lt $accountsToLock) {
-                    # Simuliere mehrfache fehlgeschlagene Anmeldeversuche
-                    for ($attempt = 1; $attempt -le 5; $attempt++) {
-                        try {
-                            # Dies würde in einer echten Umgebung durch fehlgeschlagene Anmeldungen erfolgen
-                            Set-ADUser -Identity $user -Replace @{
-                                'badPwdCount' = $attempt
-                                'badPasswordTime' = (Get-Date).ToFileTime()
-                                'lockoutTime' = (Get-Date).ToFileTime()
-                            } -ErrorAction Stop
-                        } catch {
-                            Write-Log "Fehler beim Simulieren fehlgeschlagener Anmeldung: $($_.Exception.Message)" -Level "DEBUG"
-                        }
-                    }
-                    
-                    # Account direkt sperren
+                    # badPwdCount/lockoutTime sind systemverwaltet und können nicht direkt gesetzt werden.
+                    # Eine echte Sperre entsteht nur durch fehlgeschlagene Anmeldungen - daher wird der Account deaktiviert.
                     Disable-ADAccount -Identity $user -ErrorAction Stop
                     $lockedCount++
-                    Write-Log "Account '$user' gesperrt" -Level "DEBUG"
+                    Write-Log "Account '$user' deaktiviert (Sperre simuliert)" -Level "DEBUG"
                 }
                 
                 # 3. Passwort als abgelaufen markieren
                 if ($expiredPasswords) {
-                    # Setze pwdLastSet auf ein altes Datum (vor 90 Tagen)
-                    $expiredDate = (Get-Date).AddDays(-91)
-                    $fileTime = $expiredDate.ToFileTime()
-                    
-                    Set-ADUser -Identity $user -Replace @{
-                        'pwdLastSet' = $fileTime
-                    } -ErrorAction Stop
-                    
-                    # Erzwinge Passwortänderung bei nächster Anmeldung
+                    # pwdLastSet = 0 markiert das Passwort als abgelaufen (Änderung bei nächster Anmeldung erforderlich)
                     Set-ADUser -Identity $user -ChangePasswordAtLogon $true -ErrorAction Stop
                     
                     $expiredCount++
@@ -7114,7 +7588,7 @@ function Create-RBACRoles {
         Update-Statistics
         
         # Erstelle Dokumentation
-        $docPath = ".\RBAC_Structure_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+        $docPath = (Get-ExportFilePath -FileName "RBAC_Structure_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
         $documentation = @"
 RBAC-Rollen Dokumentation
 ========================
@@ -7195,7 +7669,7 @@ function Create-BitLockerKeys {
         $errorCount = 0
         
         # Erstelle BitLocker-Key-Datei
-        $keyFile = ".\BitLockerKeys_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $keyFile = (Get-ExportFilePath -FileName "BitLockerKeys_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
         $keyData = @()
         
         for ($i = 0; $i -lt $Global:CreatedComputers.Count; $i++) {
@@ -7293,9 +7767,10 @@ function Generate-BitLockerRecoveryPassword {
     .SYNOPSIS
     Generiert ein BitLocker-kompatibles Recovery-Passwort
     #>
-    $blocks = @()
+    # Echte Recovery-Passwörter bestehen aus 8 Blöcken (6 Ziffern), jeder Block ist durch 11 teilbar (< 720896)
+    $blocks = New-Object System.Collections.Generic.List[string]
     for ($i = 0; $i -lt 8; $i++) {
-        $blocks += Get-Random -Minimum 100000 -Maximum 699999
+        $blocks.Add(('{0:D6}' -f ((Get-CryptoRandomInt -MaxExclusive 65536) * 11)))
     }
     return $blocks -join '-'
 }
@@ -7347,7 +7822,7 @@ function Create-DNSEntries {
         
         if ($result -ne "Yes") { return }
         
-        $domain = (Get-ADDomain).DNSRoot
+        $domain = (Get-CachedADDomain).DNSRoot
         $dnsZone = $domain
         
         Show-Progress -Text "Erstelle DNS-Einträge..."
@@ -7440,7 +7915,7 @@ function Create-DNSEntries {
         }
         
         # Exportiere DNS-Records
-        $dnsFile = ".\DNS_Records_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $dnsFile = (Get-ExportFilePath -FileName "DNS_Records_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
         $dnsRecords | Export-Csv -Path $dnsFile -NoTypeInformation -Encoding UTF8
         
         Hide-Progress
@@ -7544,7 +8019,7 @@ function Simulate-Migration {
                 # Dokumentiere Migration
                 $migrationData += [PSCustomObject]@{
                     SourceDomain = $sourceDomain
-                    TargetDomain = (Get-ADDomain).DNSRoot
+                    TargetDomain = (Get-CachedADDomain).DNSRoot
                     UserName = $user
                     OriginalSID = $oldSid
                     NewSID = $adUser.SID.Value
@@ -7558,7 +8033,7 @@ function Simulate-Migration {
                 Write-Log "Fehler bei Migration von '$user': $($_.Exception.Message)" -Level "ERROR"
                 $migrationData += [PSCustomObject]@{
                     SourceDomain = $sourceDomain
-                    TargetDomain = (Get-ADDomain).DNSRoot
+                    TargetDomain = (Get-CachedADDomain).DNSRoot
                     UserName = $user
                     OriginalSID = "N/A"
                     NewSID = "N/A"
@@ -7577,7 +8052,7 @@ function Simulate-Migration {
 Trust-Beziehungen Dokumentation
 ================================
 Quell-Domäne: $sourceDomain
-Ziel-Domäne: $((Get-ADDomain).DNSRoot)
+Ziel-Domäne: $((Get-CachedADDomain).DNSRoot)
 
 Empfohlene Trust-Konfiguration:
 - Trust-Typ: Forest Trust (Transitive)
@@ -7601,13 +8076,13 @@ DNS-Konfiguration:
         }
         
         # Exportiere Migrations-Bericht
-        $reportPath = ".\Migration_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+        $reportPath = (Get-ExportFilePath -FileName "Migration_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
         $report = @"
 Migrations-Simulations-Bericht
 ==============================
 Datum: $(Get-Date)
 Quell-Domäne: $sourceDomain
-Ziel-Domäne: $((Get-ADDomain).DNSRoot)
+Ziel-Domäne: $((Get-CachedADDomain).DNSRoot)
 
 Migrations-Statistik:
 - Benutzer migriert: $migratedCount
@@ -7625,7 +8100,7 @@ Hinweise:
         $report | Out-File -FilePath $reportPath -Encoding UTF8
         
         # Exportiere Details
-        $csvPath = ".\Migration_Details_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $csvPath = (Get-ExportFilePath -FileName "Migration_Details_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
         $migrationData | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
         
         Hide-Progress
@@ -7712,7 +8187,7 @@ function Create-KerberosTests {
             $Global:CreatedComputers | Select-Object -First 10
         }
         
-        $domain = (Get-ADDomain).DNSRoot
+        $domain = (Get-CachedADDomain).DNSRoot
         $totalAccounts = $targetAccounts.Count
         
         for ($i = 0; $i -lt $totalAccounts; $i++) {
@@ -7736,12 +8211,12 @@ function Create-KerberosTests {
                         "HTTP" {
                             $spns += "$servicePrefix/$account"
                             $spns += "$servicePrefix/$account.$domain"
-                            $spns += "$servicePrefix/$account.$domain:80"
-                            $spns += "$servicePrefix/$account.$domain:443"
+                            $spns += "$servicePrefix/$account.${domain}:80"
+                            $spns += "$servicePrefix/$account.${domain}:443"
                         }
                         "SQL" {
                             $spns += "$servicePrefix/$account.$domain"
-                            $spns += "$servicePrefix/$account.$domain:1433"
+                            $spns += "$servicePrefix/$account.${domain}:1433"
                         }
                         "LDAP" {
                             $spns += "$servicePrefix/$account.$domain"
@@ -7813,11 +8288,11 @@ function Create-KerberosTests {
         }
         
         # Exportiere SPN-Dokumentation
-        $spnFile = ".\Kerberos_SPNs_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $spnFile = (Get-ExportFilePath -FileName "Kerberos_SPNs_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
         $spnData | Export-Csv -Path $spnFile -NoTypeInformation -Encoding UTF8
         
         # Erstelle Test-Anleitung
-        $testGuide = ".\Kerberos_TestGuide_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+        $testGuide = (Get-ExportFilePath -FileName "Kerberos_TestGuide_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
         $guide = @"
 Kerberos Test-Anleitung
 =======================
@@ -7898,7 +8373,7 @@ function Document-FSMORoles {
         
         Show-Progress -Text "Erstelle Dokumentation..." -Value 0
         
-        $docPath = ".\AD_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+        $docPath = (Get-ExportFilePath -FileName "AD_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
         $documentation = @"
 Active Directory Dokumentation
 ==============================
@@ -8009,7 +8484,7 @@ $($dc.Name):
                 }
                 
                 # Erstelle detaillierte DC-Liste
-                $dcFile = ".\DomainControllers_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+                $dcFile = (Get-ExportFilePath -FileName "DomainControllers_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
                 $dcs | Select-Object Name, IPv4Address, OperatingSystem, IsGlobalCatalog, IsReadOnly, Site | 
                     Export-Csv -Path $dcFile -NoTypeInformation -Encoding UTF8
                 
@@ -8086,9 +8561,9 @@ function Create-AdvancedFeatures {
         
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie folgende erweiterte Features ausführen?`n`n" +
-            "$(if ($createDNS) { '- DNS-Einträge erstellen (simuliert)`n' })" +
-            "$(if ($createSPNs) { '- Service Principal Names erstellen`n' })" +
-            "$(if ($documentFSMO) { '- FSMO-Rollen dokumentieren`n' })" +
+            "$(if ($createDNS) { "- DNS-Einträge erstellen (simuliert)`n" })" +
+            "$(if ($createSPNs) { "- Service Principal Names erstellen`n" })" +
+            "$(if ($documentFSMO) { "- FSMO-Rollen dokumentieren`n" })" +
             "`nDies kann je nach Anzahl der Objekte einige Zeit dauern.",
             "Erweiterte Features",
             "YesNo",
@@ -8106,9 +8581,9 @@ function Create-AdvancedFeatures {
         if ($createDNS -and $Global:CreatedComputers.Count -gt 0) {
             Update-Progress -Current 1 -Total 3 -Text "Erstelle DNS-Einträge..."
             
-            $dnsFile = ".\DNS_Entries_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+            $dnsFile = (Get-ExportFilePath -FileName "DNS_Entries_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
             $dnsEntries = @()
-            $domain = (Get-ADDomain).DNSRoot
+            $domain = (Get-CachedADDomain).DNSRoot
             $ipBase = "10.0.1."
             
             for ($i = 0; $i -lt $Global:CreatedComputers.Count; $i++) {
@@ -8149,9 +8624,9 @@ function Create-AdvancedFeatures {
         if ($createSPNs -and $Global:CreatedServiceAccounts.Count -gt 0) {
             Update-Progress -Current 2 -Total 3 -Text "Erstelle Service Principal Names..."
             
-            $spnFile = ".\SPNs_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-            $spnData = @()
-            $domain = (Get-ADDomain).DNSRoot
+            $spnFile = (Get-ExportFilePath -FileName "SPNs_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
+            $spnData = New-Object System.Collections.Generic.List[object]
+            $domain = (Get-CachedADDomain).DNSRoot
             
             foreach ($serviceAccount in $Global:CreatedServiceAccounts) {
                 try {
@@ -8159,27 +8634,28 @@ function Create-AdvancedFeatures {
                     $account = Get-ADUser -Identity $serviceAccount -ErrorAction Stop
                     
                     # Erstelle verschiedene SPNs basierend auf Service-Typ
-                    $spns = @()
+                    # (Accounts heißen svc_sql_####, svc_iis_#### usw.; Hostname je Account eindeutig, damit keine doppelten SPNs entstehen)
+                    $spns = New-Object System.Collections.Generic.List[string]
+                    $hostLabel = $serviceAccount -replace '_', '-'
                     
-                    # Wenn Account mit "svc-sql" beginnt
-                    if ($serviceAccount -like "svc-sql*") {
-                        $spns += "MSSQLSvc/sqlserver.$domain"
-                        $spns += "MSSQLSvc/sqlserver.$domain:1433"
+                    # SQL-Server-Service-Accounts
+                    if ($serviceAccount -like "svc_sql*") {
+                        $spns.Add("MSSQLSvc/$hostLabel.$domain")
+                        $spns.Add("MSSQLSvc/$hostLabel.${domain}:1433")
                     }
-                    # Wenn Account mit "svc-web" beginnt
-                    elseif ($serviceAccount -like "svc-web*") {
-                        $spns += "HTTP/webapp.$domain"
-                        $spns += "HTTP/webapp.$domain:80"
-                        $spns += "HTTP/webapp.$domain:443"
+                    # IIS-/Web-Service-Accounts
+                    elseif ($serviceAccount -like "svc_iis*" -or $serviceAccount -like "svc_web*") {
+                        $spns.Add("HTTP/$hostLabel.$domain")
+                        $spns.Add("HTTP/$hostLabel.${domain}:80")
+                        $spns.Add("HTTP/$hostLabel.${domain}:443")
                     }
-                    # Wenn Account mit "svc-" beginnt (generisch)
-                    elseif ($serviceAccount -like "svc-*") {
-                        $serviceName = $serviceAccount.Substring(4)
-                        $spns += "HOST/$serviceName.$domain"
+                    # Sonstige Service-Accounts (generisch)
+                    elseif ($serviceAccount -like "svc_*") {
+                        $spns.Add("HOST/$hostLabel.$domain")
                     }
                     # Standard
                     else {
-                        $spns += "HOST/$serviceAccount.$domain"
+                        $spns.Add("HOST/$hostLabel.$domain")
                     }
                     
                     # SPNs zum Account hinzufügen
@@ -8187,21 +8663,21 @@ function Create-AdvancedFeatures {
                         try {
                             Set-ADUser -Identity $serviceAccount -Add @{servicePrincipalName=$spn} -ErrorAction Stop
                             
-                            $spnData += [PSCustomObject]@{
+                            $spnData.Add([PSCustomObject]@{
                                 Account = $serviceAccount
                                 SPN = $spn
                                 Status = "Created"
                                 Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                            }
+                            })
                             
                             Write-Log "SPN '$spn' zu Service-Account '$serviceAccount' hinzugefügt" -Level "DEBUG"
                         } catch {
-                            $spnData += [PSCustomObject]@{
+                            $spnData.Add([PSCustomObject]@{
                                 Account = $serviceAccount
                                 SPN = $spn
                                 Status = "Failed: $($_.Exception.Message)"
                                 Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                            }
+                            })
                             $errorCount++
                         }
                     }
@@ -8222,7 +8698,7 @@ function Create-AdvancedFeatures {
         if ($documentFSMO) {
             Update-Progress -Current 3 -Total 3 -Text "Dokumentiere FSMO-Rollen..."
             
-            $fsmoFile = ".\FSMO_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+            $fsmoFile = (Get-ExportFilePath -FileName "FSMO_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
             
             try {
                 $forest = Get-ADForest
@@ -8297,12 +8773,13 @@ function Show-Progress {
     )
     
     try {
+        Set-UiBusyState -Busy $true
         $Global:GuiControls.GridProgressArea.Visibility = [System.Windows.Visibility]::Visible
         $Global:GuiControls.LabelProgress.Content = $Text
         $Global:GuiControls.ProgressBarMain.Value = $Value
         
-        # UI aktualisieren
-        $Global:Window.Dispatcher.Invoke([System.Windows.Threading.DispatcherPriority]::Render, [action]{})
+        # UI aktualisieren (Dispatcher-Nachrichten verarbeiten, damit die GUI nicht einfriert)
+        Invoke-UiRefresh
     } catch {
         Write-Log "Fehler beim Anzeigen des Fortschritts: $($_.Exception.Message)" -Level "ERROR"
     }
@@ -8316,6 +8793,7 @@ function Hide-Progress {
     try {
         $Global:GuiControls.GridProgressArea.Visibility = [System.Windows.Visibility]::Collapsed
         $Global:GuiControls.ProgressBarMain.Value = 0
+        Set-UiBusyState -Busy $false
     } catch {
         Write-Log "Fehler beim Verstecken des Fortschritts: $($_.Exception.Message)" -Level "ERROR"
     }
@@ -8333,12 +8811,14 @@ function Update-Progress {
     )
     
     try {
-        $percentage = [math]::Round(($Current / $Total) * 100, 0)
+        if ($Total -le 0) { $Total = 1 }
+        $percentage = [math]::Min(100, [math]::Round(($Current / $Total) * 100, 0))
         
         if ($Text) {
             Show-Progress -Text "$Text ($Current von $Total)" -Value $percentage
         } else {
             $Global:GuiControls.ProgressBarMain.Value = $percentage
+            Invoke-UiRefresh
         }
     } catch {
         Write-Log "Fehler beim Aktualisieren des Fortschritts: $($_.Exception.Message)" -Level "ERROR"

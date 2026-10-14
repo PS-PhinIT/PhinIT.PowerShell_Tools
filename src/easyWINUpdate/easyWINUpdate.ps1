@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     easyWINUpdate - Windows Update Verwaltungstool mit GUI
 .DESCRIPTION
@@ -6,10 +6,75 @@
     Es bietet eine moderne XAML-GUI zur Anzeige, Installation und Deinstallation von Updates sowie zur Verwaltung
     der Update-Quellen und WSUS-Einstellungen.
 .NOTES
-    Version:        0.2.3
-    Author:         easyIT
+    Version:        0.2.4
+    Author:         Andreas Hepp | PhinIT (www.phinit.de)
     Creation Date:  31.05.2025
+    Voraussetzungen: Windows PowerShell 5.1 oder PowerShell 7 (Windows), Modul PSWindowsUpdate, Administratorrechte
+    Logs:           Unterordner "Logs" im Skriptverzeichnis (Fallback: %LOCALAPPDATA%\easyWINUpdate\Logs)
 #>
+
+$script:AppVersion = '0.2.4'
+
+#region Administratorrechte / STA sicherstellen
+$script:IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$isSta = [System.Threading.Thread]::CurrentThread.GetApartmentState() -eq [System.Threading.ApartmentState]::STA
+if ((-not $script:IsAdmin -or -not $isSta) -and $PSCommandPath) {
+    try {
+        # Gleichen PowerShell-Host (powershell.exe bzw. pwsh.exe) verwenden und Skriptpfad korrekt quoten
+        $hostExe = (Get-Process -Id $PID).Path
+        $relaunchArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', "`"$PSCommandPath`"")
+        if ($script:IsAdmin) {
+            Start-Process -FilePath $hostExe -ArgumentList $relaunchArgs -ErrorAction Stop | Out-Null
+        } else {
+            Start-Process -FilePath $hostExe -ArgumentList $relaunchArgs -Verb RunAs -ErrorAction Stop | Out-Null
+        }
+        exit
+    } catch {
+        if (-not $isSta) {
+            Write-Host "Die GUI benötigt einen STA-Thread. Bitte mit 'powershell.exe -STA -File `"$PSCommandPath`"' starten." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "Keine Administratorrechte erhalten - viele Funktionen (Dienste, Registry, DISM/SFC) stehen nicht zur Verfügung." -ForegroundColor Yellow
+    }
+}
+#endregion
+
+#region Logging
+$script:LogDirectory = $null
+foreach ($candidate in @(
+        $(if ($PSScriptRoot) { Join-Path $PSScriptRoot 'Logs' }),
+        (Join-Path $env:LOCALAPPDATA 'easyWINUpdate\Logs'))) {
+    if (-not $candidate) { continue }
+    try {
+        if (-not (Test-Path -LiteralPath $candidate)) {
+            New-Item -Path $candidate -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        }
+        $probeFile = Join-Path $candidate '.write_test'
+        [System.IO.File]::WriteAllText($probeFile, '')
+        Remove-Item -LiteralPath $probeFile -Force -ErrorAction SilentlyContinue
+        $script:LogDirectory = $candidate
+        break
+    } catch {
+        Write-Verbose "Log-Verzeichnis '$candidate' nicht beschreibbar: $($_.Exception.Message)"
+    }
+}
+$script:LogFile = if ($script:LogDirectory) { Join-Path $script:LogDirectory ("easyWINUpdate_{0}.log" -f (Get-Date -Format 'yyyyMMdd')) } else { $null }
+
+function Write-AppLog {
+    param (
+        [string]$Message,
+        [string]$Level = 'INFO'
+    )
+    if (-not $script:LogFile) { return }
+    try {
+        $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
+        [System.IO.File]::AppendAllText($script:LogFile, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+    } catch {
+        Write-Verbose "Log konnte nicht geschrieben werden: $($_.Exception.Message)"
+    }
+}
+Write-AppLog -Message "easyWINUpdate v$($script:AppVersion) gestartet (Admin: $($script:IsAdmin), PowerShell $($PSVersionTable.PSVersion))"
+#endregion
 
 # Fehlercode-Mapping mit bekannten Loesungen
 $errorCodes = @{
@@ -474,8 +539,10 @@ if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
             Install-Module PowerShellGet -Force -AllowClobber -Scope CurrentUser -ErrorAction Stop
         }
         
-        # PSWindowsUpdate installieren
-        Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -ErrorAction Stop
+        # PSWindowsUpdate installieren (als Administrator für alle Benutzer, damit auch die geplante Aufgabe unter SYSTEM es laden kann)
+        $moduleScope = if ($script:IsAdmin) { "AllUsers" } else { "CurrentUser" }
+        Install-Module -Name PSWindowsUpdate -Force -Scope $moduleScope -ErrorAction Stop
+        Write-AppLog -Message "PSWindowsUpdate installiert (Scope: $moduleScope)"
         Import-Module PSWindowsUpdate -ErrorAction Stop
         Write-Host "PSWindowsUpdate-Modul wurde installed und importiert." -ForegroundColor Green
     } catch {
@@ -503,7 +570,7 @@ Add-Type -AssemblyName WindowsBase
 <Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="easyWINUpdate - Windows Update Management" Height="950" Width="1400" 
+    Title="easyWINUpdate v0.2.4 - Windows Update Management" Height="950" Width="1400" 
     WindowStartupLocation="CenterScreen" ResizeMode="CanResize" 
     Background="#F0F0F0">
     
@@ -543,7 +610,7 @@ Add-Type -AssemblyName WindowsBase
             <Grid>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="easyWINUpdate" Foreground="White" FontSize="24" FontWeight="Bold" VerticalAlignment="Center"/>
-                    <TextBlock Text="v0.2.3" Foreground="#CCFFFFFF" FontSize="14" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="v0.2.4" Foreground="#CCFFFFFF" FontSize="14" Margin="10,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <TextBlock x:Name="computerNameLabel" Text="Computer: " Foreground="White" FontSize="14" VerticalAlignment="Center"/>
@@ -1021,7 +1088,7 @@ Add-Type -AssemblyName WindowsBase
                                         <StackPanel>
                                             <TextBlock Text="WSUS Target Groups" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,15"/>
                                             <TextBlock TextWrapping="Wrap" Margin="0,0,0,15">
-                                                These are the available WSUS target groups. You can change the target group for this computer.
+                                                Typical WSUS target groups (client-side targeting). The selected group must exist on the WSUS server. You can change the target group for this computer.
                                             </TextBlock>
                                             
                                             <DataGrid x:Name="dgWSUSTargetGroups" AutoGenerateColumns="False" Margin="0,0,0,15" 
@@ -1502,7 +1569,7 @@ Add-Type -AssemblyName WindowsBase
             <Grid Margin="20,0">
                 <TextBlock x:Name="statusText" Text="Ready" VerticalAlignment="Center"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <TextBlock x:Name="versionText" Text="easyWINUpdate v0.1.4" FontStyle="Italic" Foreground="#555555"/>
+                    <TextBlock x:Name="versionText" Text="easyWINUpdate v0.2.4 - PhinIT" FontStyle="Italic" Foreground="#555555"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -1543,6 +1610,141 @@ function Update-StatusText {
     $statusText = $window.FindName("statusText")
     $statusText.Text = $Text
     $statusText.Foreground = $Color
+
+    $logLevel = switch ($Color) { 'Red' { 'ERROR' } 'Yellow' { 'WARN' } default { 'INFO' } }
+    Write-AppLog -Message $Text -Level $logLevel
+}
+
+#region Hintergrundverarbeitung (verhindert Einfrieren der GUI)
+$script:BackgroundTasks = New-Object System.Collections.ArrayList
+$script:BackgroundTimer = $null
+
+# Startet einen Skriptblock in einem eigenen Runspace. Das Ergebnis wird per DispatcherTimer
+# im GUI-Thread abgeholt und an -OnCompleted ($Output, $ErrorText) übergeben.
+function Start-BackgroundTask {
+    param (
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock,
+        [hashtable]$Parameters = @{},
+        [scriptblock]$OnCompleted,
+        [string]$Name = 'Hintergrundaufgabe'
+    )
+
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $ps = [PowerShell]::Create()
+    $ps.Runspace = $runspace
+    [void]$ps.AddScript($ScriptBlock.ToString())
+    if ($Parameters.Count -gt 0) {
+        [void]$ps.AddParameters($Parameters)
+    }
+
+    $task = [PSCustomObject]@{
+        Name        = $Name
+        PowerShell  = $ps
+        Handle      = $ps.BeginInvoke()
+        OnCompleted = $OnCompleted
+    }
+    [void]$script:BackgroundTasks.Add($task)
+    Write-AppLog -Message "Hintergrundaufgabe gestartet: $Name"
+
+    if (-not $script:BackgroundTimer) {
+        $script:BackgroundTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $script:BackgroundTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+        $script:BackgroundTimer.Add_Tick({ Complete-BackgroundTasks })
+    }
+    $script:BackgroundTimer.Start()
+}
+
+function Complete-BackgroundTasks {
+    foreach ($task in @($script:BackgroundTasks)) {
+        if (-not $task.Handle.IsCompleted) { continue }
+        [void]$script:BackgroundTasks.Remove($task)
+
+        $output = @()
+        $errorText = $null
+        try {
+            $output = @($task.PowerShell.EndInvoke($task.Handle))
+            if ($task.PowerShell.Streams.Error.Count -gt 0) {
+                $errorText = ($task.PowerShell.Streams.Error | ForEach-Object { $_.ToString() }) -join '; '
+            }
+        } catch {
+            $errorText = $_.Exception.Message
+        } finally {
+            $task.PowerShell.Runspace.Dispose()
+            $task.PowerShell.Dispose()
+        }
+
+        Write-AppLog -Message "Hintergrundaufgabe beendet: $($task.Name)$(if ($errorText) { " (Fehler: $errorText)" })" -Level $(if ($errorText) { 'WARN' } else { 'INFO' })
+        if ($task.OnCompleted) {
+            try {
+                & $task.OnCompleted $output $errorText
+            } catch {
+                Update-StatusText -Text "Fehler bei der Verarbeitung von '$($task.Name)': $_" -Color "Red"
+            }
+        }
+    }
+    if ($script:BackgroundTasks.Count -eq 0 -and $script:BackgroundTimer) {
+        $script:BackgroundTimer.Stop()
+    }
+}
+
+# Führt eine im Skript definierte Funktion im Hintergrund aus (Update-StatusText wird dort ignoriert)
+function Start-FunctionInBackground {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$FunctionName,
+        [hashtable]$FunctionParameters = @{},
+        [string[]]$HelperFunctions = @(),
+        [scriptblock]$OnCompleted
+    )
+
+    $helperText = foreach ($helper in $HelperFunctions) {
+        "function $helper {`n$((Get-Command -Name $helper -CommandType Function).ScriptBlock.ToString())`n}`n"
+    }
+    $functionBody = (Get-Command -Name $FunctionName -CommandType Function).ScriptBlock.ToString()
+    $scriptText = @"
+param([hashtable]`$FunctionParameters)
+function Update-StatusText { param([string]`$Text, [string]`$Color) }
+$($helperText -join "`n")
+function $FunctionName {
+$functionBody
+}
+$FunctionName @FunctionParameters
+"@
+    Start-BackgroundTask -Name $FunctionName -ScriptBlock ([scriptblock]::Create($scriptText)) -Parameters @{ FunctionParameters = $FunctionParameters } -OnCompleted $OnCompleted
+}
+
+# Öffnet ein Konsolenfenster für lang laufende Kommandozeilen-Tools (DISM, SFC, CHKDSK),
+# damit die GUI bedienbar bleibt und der Fortschritt sichtbar ist.
+function Start-ConsoleTool {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$CommandLine,
+        [string]$Title = 'easyWINUpdate'
+    )
+    $cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    Start-Process -FilePath $cmdExe -ArgumentList "/k title $Title & $CommandLine" -ErrorAction Stop | Out-Null
+    Write-AppLog -Message "Konsolen-Tool gestartet: $CommandLine"
+}
+#endregion
+
+# Startet die Update-Erkennung (Windows 10/11/Server 2016+: UsoClient, ältere Systeme: wuauclt)
+function Start-UpdateDetection {
+    param (
+        [switch]$ResetAuthorization
+    )
+    $usoClient = Join-Path $env:SystemRoot 'System32\UsoClient.exe'
+    if ([Environment]::OSVersion.Version.Major -ge 10 -and (Test-Path -LiteralPath $usoClient)) {
+        & $usoClient StartScan 2>&1 | Out-Null
+    } else {
+        $wuArgs = @()
+        if ($ResetAuthorization) { $wuArgs += '/resetauthorization' }
+        $wuArgs += '/detectnow'
+        & (Join-Path $env:SystemRoot 'System32\wuauclt.exe') @wuArgs 2>&1 | Out-Null
+    }
 }
 
 # Manuelle WSUS-Konfiguration anwenden
@@ -1555,8 +1757,8 @@ $btnApplyManualWSUS.Add_Click({
     $cmbManualWSUSTargetGroup = $window.FindName("cmbManualWSUSTargetGroup")
     
     $wsusServer = $txtManualWSUSServer.Text.Trim()
-    $wsusPort = [int]$txtManualWSUSPort.Text.Trim()
-    $useSSL = $chkManualWSUSUseSSL.IsChecked
+    $wsusPort = 0
+    $useSSL = [bool]$chkManualWSUSUseSSL.IsChecked
     $targetGroup = if ($cmbManualWSUSTargetGroup.SelectedItem) { $cmbManualWSUSTargetGroup.SelectedItem.Content } else { "Standard" }
     
     # Prüfen, ob ein Server angegeben wurde
@@ -1564,6 +1766,18 @@ $btnApplyManualWSUS.Add_Click({
         [System.Windows.MessageBox]::Show(
             "Please specify a WSUS server.",
             "Missing Input",
+            [System.Windows.MessageBoxButton]::OK,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        return
+    }
+
+    # Servername (Hostname/FQDN/IPv4) und Port validieren
+    if ($wsusServer -notmatch '^[A-Za-z0-9]([A-Za-z0-9\-\.]{0,252})$' -or
+        -not [int]::TryParse($txtManualWSUSPort.Text.Trim(), [ref]$wsusPort) -or $wsusPort -lt 1 -or $wsusPort -gt 65535) {
+        [System.Windows.MessageBox]::Show(
+            "Ungültiger WSUS-Servername oder Port. Bitte nur den Hostnamen/FQDN (ohne http://) und einen Port zwischen 1 und 65535 angeben.",
+            "Ungültige Eingabe",
             [System.Windows.MessageBoxButton]::OK,
             [System.Windows.MessageBoxImage]::Warning
         )
@@ -1605,9 +1819,9 @@ $btnLoadWSUSTargetGroups.Add_Click({
     $cmbManualWSUSTargetGroup = $window.FindName("cmbManualWSUSTargetGroup")
     
     $wsusServer = $txtManualWSUSServer.Text.Trim()
-    $wsusPort = [int]$txtManualWSUSPort.Text.Trim()
-    $useSSL = $chkManualWSUSUseSSL.IsChecked
-    
+    $wsusPort = 8530
+    if (-not [int]::TryParse($txtManualWSUSPort.Text.Trim(), [ref]$wsusPort)) { $wsusPort = 8530 }
+    $useSSL = [bool]$chkManualWSUSUseSSL.IsChecked
     # Prüfen, ob ein Server angegeben wurde
     if ([string]::IsNullOrEmpty($wsusServer)) {
         [System.Windows.MessageBox]::Show(
@@ -1698,15 +1912,15 @@ function Diagnose-WindowsUpdateError {
         
         # Wenn kein Fehlercode uebergeben wurde, versuche den letzten Fehlercode aus dem Ereignisprotokoll zu holen
         if ([string]::IsNullOrEmpty($ErrorCode)) {
-            $lastError = Get-WinEvent -LogName "Microsoft-Windows-WindowsUpdateClient/Operational" -MaxEvents 50 | 
-                Where-Object { $_.LevelDisplayName -eq "Fehler" -or $_.Message -like "*0x8*" } | 
+            $lastError = Get-WinEvent -LogName "Microsoft-Windows-WindowsUpdateClient/Operational" -MaxEvents 50 -ErrorAction SilentlyContinue | 
+                Where-Object { $_.Level -eq 2 -or $_.Message -like "*0x8*" } | 
                 Select-Object -First 1
                 
             if ($lastError) {
                 # Extrahiere den Fehlercode aus der Nachricht (Format 0x8xxxxxxx)
-                $matches = [regex]::Matches($lastError.Message, "0x8[0-9A-Fa-f]{7}")
-                if ($matches.Count -gt 0) {
-                    $ErrorCode = $matches[0].Value
+                $codeMatches = [regex]::Matches($lastError.Message, "0x8[0-9A-Fa-f]{7}")
+                if ($codeMatches.Count -gt 0) {
+                    $ErrorCode = $codeMatches[0].Value
                 }
             }
         }
@@ -1748,11 +1962,11 @@ function Repair-BITSService {
     try {
         Update-StatusText -Text "Performing extended BITS repair..." -Color "Blue"
         
+        # BITS-Warteschlange löschen (muss vor dem Stoppen des Dienstes erfolgen)
+        Get-BitsTransfer -AllUsers -ErrorAction SilentlyContinue | Remove-BitsTransfer -ErrorAction SilentlyContinue
+        
         # BITS-Dienst stoppen
         Stop-Service -Name BITS -Force
-        
-        # BITS-Warteschlange löschen
-        Get-BitsTransfer -AllUsers | Remove-BitsTransfer
         
         # BITS-Verzeichnisse bereinigen
         $qmgrFiles = @(
@@ -1772,9 +1986,12 @@ function Repair-BITSService {
         # Dienststarttyp auf Automatisch setzen
         Set-ItemProperty -Path $bitsSvcKey -Name "Start" -Value 2
         
-        # Sicherheitsbeschreibungen zurücksetzen
-        $securityCommand = 'sc.exe sdset bits D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;AU)(A;;CCLCSWRPWPDTLOCRRC;;;PU)'
-        Invoke-Expression -Command $securityCommand
+        # Sicherheitsbeschreibungen zurücksetzen (direkter Aufruf statt Invoke-Expression)
+        $bitsSddl = 'D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;AU)(A;;CCLCSWRPWPDTLOCRRC;;;PU)'
+        $scOutput = & "$env:SystemRoot\System32\sc.exe" sdset bits $bitsSddl 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "sc.exe sdset bits fehlgeschlagen (ExitCode $LASTEXITCODE): $scOutput"
+        }
         
         # BITS-Dienst neu starten
         Start-Service -Name BITS
@@ -1831,6 +2048,9 @@ function Repair-WaaSMedicService {
 }
 # Function to analyze Windows Update logs
 function Analyze-WindowsUpdateLogs {
+    param (
+        [string]$OutputDirectory = $env:TEMP
+    )
     try {
         Update-StatusText -Text "Analysiere Windows Update-Logs..." -Color "Blue"
         
@@ -1839,8 +2059,9 @@ function Analyze-WindowsUpdateLogs {
         $osVersion = [Version]$osInfo.Version
         
         if ($osVersion -ge [Version]"10.0") {
-            # Windows 10/11: Logs konvertieren
-            $logPath = "$env:TEMP\WindowsUpdate.log"
+            # Windows 10/11: Logs konvertieren (ETL -> Text)
+            if (-not $OutputDirectory -or -not (Test-Path -LiteralPath $OutputDirectory)) { $OutputDirectory = $env:TEMP }
+            $logPath = Join-Path $OutputDirectory ("WindowsUpdate_{0}.log" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
             Get-WindowsUpdateLog -LogPath $logPath | Out-Null
         } else {
             # Ältere Windows-Versionen
@@ -1864,7 +2085,7 @@ function Analyze-WindowsUpdateLogs {
         )
         
         $logContent = Get-Content -Path $logPath -Tail 1000 -ErrorAction SilentlyContinue
-        $errors = $logContent | Where-Object { 
+        $logErrors = @($logContent | Where-Object { 
             $line = $_
             $foundKeyword = $false
             foreach ($keyword in $errorKeywords) {
@@ -1874,17 +2095,17 @@ function Analyze-WindowsUpdateLogs {
                 }
             }
             $foundKeyword
-        } | Select-Object -Last 20
+        } | Select-Object -Last 20)
         
-        if ($errors.Count -eq 0) {
+        if ($logErrors.Count -eq 0) {
             Update-StatusText -Text "No obvious errors found in Windows Update logs." -Color "Green"
-            return "No distinct errors found in the last 1000 log entries."
+            return "No distinct errors found in the last 1000 log entries.`r`nLog: $logPath"
         } else {
             Update-StatusText -Text "Errors found in Windows Update logs." -Color "Yellow"
             
-            $output = "The last 20 error messages from the Windows Update logs:`r`n"
-            foreach ($error in $errors) {
-                $output += "- $error`r`n"
+            $output = "The last 20 error messages from the Windows Update logs ($logPath):`r`n"
+            foreach ($logLine in $logErrors) {
+                $output += "- $logLine`r`n"
             }
             
             return $output
@@ -1916,14 +2137,11 @@ function Repair-WindowsUpdateRegistry {
             
             # Überprüfung und Korrektur spezifischer Schlüsselwerte
             if ($path -eq "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update") {
-                # AUOptions prüfen (falls auf deaktiviert)
-                $auOptionsPath = Join-Path $path "AUOptions"
-                if (Test-Path $auOptionsPath) {
-                    $auOptions = (Get-ItemProperty -Path $path).AUOptions
-                    if ($auOptions -eq 1) {
-                        Set-ItemProperty -Path $path -Name "AUOptions" -Value 3 # Auf "Herunterladen aber nicht installieren" setzen
-                        Update-StatusText -Text "Automatische Updates were disabled - set to 'Download but do not install'." -Color "Blue"
-                    }
+                # AUOptions prüfen (falls auf deaktiviert) - AUOptions ist ein Registry-Wert, kein Schlüssel
+                $auOptions = (Get-ItemProperty -Path $path -Name "AUOptions" -ErrorAction SilentlyContinue).AUOptions
+                if ($null -ne $auOptions -and $auOptions -eq 1) {
+                    Set-ItemProperty -Path $path -Name "AUOptions" -Value 3 # Auf "Herunterladen aber nicht installieren" setzen
+                    Update-StatusText -Text "Automatische Updates were disabled - set to 'Download but do not install'." -Color "Blue"
                 }
             }
         }
@@ -2027,7 +2245,7 @@ function Repair-WindowsUpdateDatabase {
         }
         
         # Update-Erkennung erzwingen
-        wuauclt.exe /resetauthorization /detectnow
+        Start-UpdateDetection -ResetAuthorization
         
         Update-StatusText -Text "Windows Update database has been repaired. The system should be restarted." -Color "Green"
         return $true
@@ -2143,15 +2361,15 @@ function Auto-FixWindowsUpdateIssues {
         }
         
         # Step 2: Analyze existing errors
-        $lastError = Get-WinEvent -LogName "Microsoft-Windows-WindowsUpdateClient/Operational" -MaxEvents 50 | 
-            Where-Object { $_.LevelDisplayName -eq "Fehler" -or $_.Message -like "*0x8*" } | 
+        $lastError = Get-WinEvent -LogName "Microsoft-Windows-WindowsUpdateClient/Operational" -MaxEvents 50 -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Level -eq 2 -or $_.Message -like "*0x8*" } | 
             Select-Object -First 1
         
         $errorCode = ""
         if ($lastError) {
-            $matches = [regex]::Matches($lastError.Message, "0x8[0-9A-Fa-f]{7}")
-            if ($matches.Count -gt 0) {
-                $errorCode = $matches[0].Value
+            $codeMatches = [regex]::Matches($lastError.Message, "0x8[0-9A-Fa-f]{7}")
+            if ($codeMatches.Count -gt 0) {
+                $errorCode = $codeMatches[0].Value
                 Update-StatusText -Text "Last Windows Update error code: $errorCode" -Color "Yellow"
             }
         }
@@ -2191,8 +2409,8 @@ function Auto-FixWindowsUpdateIssues {
             "0x8024402C" { # DNS resolution problem
                 Update-StatusText -Text "DNS problem detected. Resetting network settings..." -Color "Yellow"
                 # Netzwerkeinstellungen zurücksetzen
-                ipconfig /flushdns
-                ipconfig /registerdns
+                ipconfig.exe /flushdns | Out-Null
+                ipconfig.exe /registerdns | Out-Null
                 $specificFix = $true
             }
         }
@@ -2222,7 +2440,7 @@ function Auto-FixWindowsUpdateIssues {
         
         # Step 6: Update detection forced
         Update-StatusText -Text "Forcing update detection..." -Color "Blue"
-        wuauclt.exe /resetauthorization /detectnow
+        Start-UpdateDetection -ResetAuthorization
         
         Update-StatusText -Text "Automatic error correction completed. It is recommended to restart the computer." -Color "Green"
         return $true
@@ -2234,30 +2452,27 @@ function Auto-FixWindowsUpdateIssues {
 # Funktion zum Zurücksetzen der WSUS-Einstellungen
 function Reset-WSUSSettings {
     try {
-        # WSUS-Einstellungen aus der Registry entfernen
-        $regKeys = @(
-            "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate",
-            "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
-        )
-        
-        foreach ($key in $regKeys) {
-            if (Test-Path $key) {
-                Remove-Item -Path $key -Force -Recurse -ErrorAction SilentlyContinue
+        # Nur WSUS-relevante Werte entfernen (andere Windows Update-Richtlinien bleiben erhalten)
+        $wuRegPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+        $auRegPath = "$wuRegPath\AU"
+        if (Test-Path $wuRegPath) {
+            foreach ($valueName in @('WUServer', 'WUStatusServer', 'UpdateServiceUrlAlternate', 'TargetGroup', 'TargetGroupEnabled')) {
+                Remove-ItemProperty -Path $wuRegPath -Name $valueName -ErrorAction SilentlyContinue
             }
         }
-        
-        # Windows Update Dienste neustarten
-        Restart-Service -Name wuauserv -Force
-        Restart-Service -Name bits -Force
+        if (Test-Path $auRegPath) {
+            Remove-ItemProperty -Path $auRegPath -Name 'UseWUServer' -ErrorAction SilentlyContinue
+        }
         
         # WindowsUpdate-Dienst-Client ID zurücksetzen
-        Stop-Service -Name wuauserv
+        Stop-Service -Name wuauserv -Force
         Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Name "SusClientId" -ErrorAction SilentlyContinue
         Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Name "SusClientIDValidation" -ErrorAction SilentlyContinue
         Start-Service -Name wuauserv
+        Restart-Service -Name bits -Force
         
         # Client-Aktualisierung erzwingen
-        wuauclt.exe /resetauthorization /detectnow
+        Start-UpdateDetection -ResetAuthorization
         
         return $true
     } catch {
@@ -2280,33 +2495,31 @@ function Get-InstalledWindowsUpdates {
     }
 }
 
-# Funktion zum Abrufen verfügbarer Updates
+# Funktion zum Abrufen verfügbarer Updates (Windows Update Agent COM-API, Standard-Updatequelle inkl. WSUS)
 function Get-AvailableWindowsUpdates {
     param (
-        [switch]$IncludeCritical = $true,
-        [switch]$IncludeSecurity = $true,
-        [switch]$IncludeDefinition = $true,
-        [switch]$IncludeFeature = $false
+        [bool]$IncludeCritical = $true,
+        [bool]$IncludeSecurity = $true,
+        [bool]$IncludeDefinition = $true,
+        [bool]$IncludeFeature = $false
     )
     
     try {
-        Write-Host "Suche nach Windows Updates..." -ForegroundColor Cyan
+        Write-Verbose "Suche nach Windows Updates..."
         
-        # Kategorien basierend auf Parametern bestimmen
-        $categoryFilter = @()
+        # Kategorien basierend auf Parametern bestimmen ("Andere" wird immer angezeigt)
+        $categoryFilter = @("Andere")
         if ($IncludeCritical) { $categoryFilter += "Critical Updates" }
         if ($IncludeSecurity) { $categoryFilter += "Security Updates" }
         if ($IncludeDefinition) { $categoryFilter += "Definition Updates" }
         if ($IncludeFeature) { $categoryFilter += "Feature Packs" }
         
-        Write-Host "Suche in Kategorien: $($categoryFilter -join ", ")" -ForegroundColor Cyan
-        
         # Windows Update COM-Objekt erstellen
         $updateSession = New-Object -ComObject Microsoft.Update.Session
         $updateSearcher = $updateSession.CreateUpdateSearcher()
         
-        # Suchkriterien definieren
-        $searchCriteria = "IsInstalled=0"
+        # Suchkriterien definieren (ausgeblendete Updates nicht anzeigen)
+        $searchCriteria = "IsInstalled=0 and IsHidden=0"
         
         # Nach Updates suchen
         $searchResult = $updateSearcher.Search($searchCriteria)
@@ -2314,18 +2527,21 @@ function Get-AvailableWindowsUpdates {
         # Updates filtern und formatieren
         $updates = @()
         foreach ($update in $searchResult.Updates) {
-            # Kategorie bestimmen
+            # Kategorie anhand der WU-Kategorien bzw. MSRC-Schweregrad bestimmen
+            $categoryNames = @($update.Categories | ForEach-Object { $_.Name })
             $category = "Andere"
-            if ($update.MsrcSeverity -eq "Critical") { $category = "Critical Updates" }
-            elseif ($update.Type -like "*Security*") { $category = "Security Updates" }
-            elseif ($update.Title -like "*Definition*") { $category = "Definition Updates" }
-            elseif ($update.Title -like "*Feature*") { $category = "Feature Packs" }
+            if ($update.MsrcSeverity -eq "Critical" -or $categoryNames -contains "Critical Updates") { $category = "Critical Updates" }
+            elseif ($categoryNames -contains "Security Updates" -or $update.MsrcSeverity) { $category = "Security Updates" }
+            elseif ($categoryNames -contains "Definition Updates" -or $update.Title -match 'Definition|Security Intelligence') { $category = "Definition Updates" }
+            elseif ($categoryNames -contains "Feature Packs" -or $categoryNames -contains "Upgrades" -or $update.Title -like "*Feature*") { $category = "Feature Packs" }
             
             # Prüfen, ob Update der ausgewählten Kategorie entspricht
-            if ($categoryFilter.Count -eq 0 -or $categoryFilter -contains $category) {
+            if ($categoryFilter -contains $category) {
                 # KB-Nummer extrahieren
-                $kbMatch = [regex]::Match($update.Title, 'KB\d+')
-                $kbNumber = if ($kbMatch.Success) { $kbMatch.Value } else { "Unbekannt" }
+                $kbNumber = if ($update.KBArticleIDs.Count -gt 0) { "KB$($update.KBArticleIDs.Item(0))" } else {
+                    $kbMatch = [regex]::Match($update.Title, 'KB\d+')
+                    if ($kbMatch.Success) { $kbMatch.Value } else { "Unbekannt" }
+                }
                 
                 $updates += [PSCustomObject]@{
                     IsSelected = $false
@@ -2333,15 +2549,9 @@ function Get-AvailableWindowsUpdates {
                     Title = $update.Title
                     Category = $category
                     Size = if ($update.MaxDownloadSize -gt 0) { "$([Math]::Round($update.MaxDownloadSize / 1MB, 2)) MB" } else { "Unbekannt" }
-                    Identity = $update.Identity
+                    Identity = [string]$update.Identity.UpdateID
                 }
             }
-        }
-        
-        if ($updates.Count -gt 0) {
-            Write-Host "$($updates.Count) Updates found." -ForegroundColor Green
-        } else {
-            Write-Host "No updates found." -ForegroundColor Yellow
         }
         
         return $updates
@@ -2359,20 +2569,24 @@ function Remove-WindowsUpdateKB {
     )
     
     try {
-        if (-not $KBNumber.StartsWith("KB")) {
-            $KBNumber = "KB$KBNumber"
+        $kbID = ($KBNumber.Trim() -replace '^(?i)KB', '')
+        if ($kbID -notmatch '^\d{4,8}$') {
+            throw "Ungültige KB-Nummer: '$KBNumber'"
         }
+        $KBNumber = "KB$kbID"
         
-        $kbID = $KBNumber.Replace('KB', '')
-        $result = Start-Process -FilePath "wusa.exe" -ArgumentList "/uninstall", "/kb:$kbID", "/quiet", "/norestart" -Wait -PassThru
+        $wusaPath = Join-Path $env:SystemRoot 'System32\wusa.exe'
+        $process = Start-Process -FilePath $wusaPath -ArgumentList "/uninstall", "/kb:$kbID", "/quiet", "/norestart" -Wait -PassThru -ErrorAction Stop
         
-        # Warten auf Abschluss der Deinstallation
-        Start-Sleep -Seconds 5
+        # 0 = Erfolg, 3010 = Erfolg, Neustart erforderlich
+        if ($process.ExitCode -notin @(0, 3010)) {
+            throw "wusa.exe beendet mit ExitCode $($process.ExitCode) (2359303 = Update nicht installiert / nicht deinstallierbar)"
+        }
         
         return $true
     } catch {
         $errorMessage = $_.Exception.Message
-        Write-Error ("Error removing Windows Update KB " + $KBNumber + ": " + $errorMessage)
+        Write-Error ("Error removing Windows Update " + $KBNumber + ": " + $errorMessage)
         return $false
     }
 }
@@ -2402,10 +2616,11 @@ function Get-ServiceStatusInfo {
     }
 }
 
-# Funktion zum Testen der WSUS-Verbindung
+# Funktion zum Testen der WSUS-Verbindung (TCP-Verbindung zum WSUS-Port statt ICMP-Ping)
 function Test-WSUSConnection {
     param (
-        [string]$WSUSServer
+        [string]$WSUSServer,
+        [int]$TimeoutMilliseconds = 3000
     )
     
     try {
@@ -2413,29 +2628,26 @@ function Test-WSUSConnection {
             return $false
         }
         
-        # Server-URL extrahieren
-        $serverUrl = $WSUSServer
-        if ($serverUrl -match "http[s]?://([^/:]+)(?::[0-9]+)?/?") {
-            $serverName = $matches[1]
-        } else {
-            $serverName = $serverUrl
+        # Server-URL zerlegen (Standardports: 8530 HTTP, 8531 HTTPS)
+        $serverName = $WSUSServer
+        $port = 8530
+        if ($WSUSServer -match "^(https?)://([^/:]+)(?::([0-9]+))?") {
+            $serverName = $Matches[2]
+            if ($Matches[3]) {
+                $port = [int]$Matches[3]
+            } elseif ($Matches[1] -eq 'https') {
+                $port = 8531
+            }
         }
         
-        # Testen, ob der Server erreichbar ist
-        $ping = Test-Connection -ComputerName $serverName -Count 2 -Quiet
-        
-        if (-not $ping) {
-            return $false
-        }
-        
-        # Versuchen, die WSUS-Konfiguration zu aktualisieren
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
         try {
-            # PowerShell-Befehl zum Aktualisieren der WSUS-Konfiguration
-            wuauclt.exe /detectnow
-            return $true
-        } catch {
-            return $false
+            $connectTask = $tcpClient.ConnectAsync($serverName, $port)
+            $connected = $connectTask.Wait($TimeoutMilliseconds) -and $tcpClient.Connected
+        } finally {
+            $tcpClient.Dispose()
         }
+        return [bool]$connected
     } catch {
         return $false
     }
@@ -2531,7 +2743,7 @@ function Get-WindowsUpdateGPOSettings {
             # Neustart-Verhalten
             $rebootRelaunchTimeout = Get-ItemProperty -Path $auRegPath -Name "RebootRelaunchTimeout" -ErrorAction SilentlyContinue
             if ($null -ne $rebootRelaunchTimeout) {
-                $settings.RebootBehavior = if ($rebootRelaunchTimeout.RebootRelaunchTimeout -eq 0) { 0 } else { 1 }
+                $settings.RebootBehavior = if ($rebootRelaunchTimeout.RebootRelaunchTimeout -gt 0) { 1 } else { 0 }
             }
         }
         
@@ -2577,8 +2789,14 @@ function Set-WindowsUpdateGPOSettings {
         # Benachrichtigungen
         Set-ItemProperty -Path $auRegPath -Name "NoAutoUpdateNotification" -Value ([int](-not $ShowNotifications)) -Type DWord
         
-        # Neustart-Verhalten
-        Set-ItemProperty -Path $auRegPath -Name "RebootRelaunchTimeout" -Value (if ($RebootBehavior -eq 0) { 0 } else { 15 }) -Type DWord
+        # Neustart-Verhalten (RebootRelaunchTimeout ist nur mit RebootRelaunchTimeoutEnabled wirksam, gültig 1-1440 Minuten)
+        if ($RebootBehavior -eq 0) {
+            Remove-ItemProperty -Path $auRegPath -Name "RebootRelaunchTimeout" -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $auRegPath -Name "RebootRelaunchTimeoutEnabled" -ErrorAction SilentlyContinue
+        } else {
+            Set-ItemProperty -Path $auRegPath -Name "RebootRelaunchTimeoutEnabled" -Value 1 -Type DWord
+            Set-ItemProperty -Path $auRegPath -Name "RebootRelaunchTimeout" -Value 15 -Type DWord
+        }
         
         # Windows Update-Dienste neu starten
         Restart-Service -Name wuauserv -Force
@@ -2646,69 +2864,45 @@ function Set-ManualWSUSConfiguration {
 # Funktion zum Verwalten der WSUS-Synchronisierung
 function Start-WSUSSynchronization {
     try {
-        # WSUS-Synchronisierung starten (Client-seitig)
+        # WSUS-Synchronisierung starten (Client-seitig: Update-Erkennung gegen die konfigurierte Quelle)
         Update-StatusText -Text "Starte WSUS-Synchronisierung..." -Color "Blue"
-        
-        # wuauclt.exe /detectnow für ältere Windows-Versionen
-        # UsoClient.exe StartScan für neuere Windows-Versionen
-        $osVersion = [System.Environment]::OSVersion.Version
-        $win10Build = 10240 # Windows 10 RTM Build
-        
-        if ($osVersion.Major -ge 10 -and $osVersion.Build -ge $win10Build) {
-            # Windows 10 oder neuer - UsoClient verwenden
-            try {
-                & "$env:SystemRoot\System32\UsoClient.exe" StartScan | Out-Null
-                Update-StatusText -Text "WSUS synchronization started (Windows 10+ method)" -Color "Green"
-                return $true
-            } catch {
-                # Fallback auf wuauclt
-                wuauclt.exe /detectnow /reportnow | Out-Null
-                Update-StatusText -Text "WSUS synchronization started (Fallback method)" -Color "Green"
-                return $true
-            }
-        } else {
-            # Ältere Windows-Versionen - wuauclt verwenden
-            wuauclt.exe /detectnow /reportnow | Out-Null
-            Update-StatusText -Text "WSUS synchronization started (Legacy method)" -Color "Green"
-            return $true
-        }
+        Start-UpdateDetection
+        Update-StatusText -Text "WSUS-Synchronisierung (Update-Erkennung) wurde gestartet." -Color "Green"
+        return $true
     } catch {
         Update-StatusText -Text "Error starting WSUS synchronization: $_" -Color "Red"
         return $false
     }
 }
 
-# Funktion zum Abrufen des WSUS-Synchronisierungsverlaufs
+# Funktion zum Abrufen des Synchronisierungsverlaufs (Update-Suchen) aus dem Ereignisprotokoll
 function Get-WSUSSyncHistory {
+    param (
+        [int]$MaxEntries = 20
+    )
     try {
-        # Hier würde in einer echten Implementierung der Synchronisierungsverlauf aus Windows-Event-Logs oder anderen Quellen gelesen
-        # Als Beispiel geben wir einige Dummy-Daten zurück
-        $currentDate = Get-Date
+        # Ereignis-ID 26 = Suche erfolgreich, 25 = Suche fehlgeschlagen (Microsoft-Windows-WindowsUpdateClient)
+        $events = Get-WinEvent -FilterHashtable @{
+            LogName = 'Microsoft-Windows-WindowsUpdateClient/Operational'
+            Id      = 25, 26
+        } -MaxEvents $MaxEntries -ErrorAction SilentlyContinue
         
-        $syncHistory = @(
+        $syncHistory = foreach ($wuEvent in $events) {
             [PSCustomObject]@{
-                Date = $currentDate.AddDays(-1).ToString("yyyy-MM-dd HH:mm:ss")
-                Status = "Success"
-                Details = "Updates successfully synchronized"
-            },
-            [PSCustomObject]@{
-                Date = $currentDate.AddDays(-2).ToString("yyyy-MM-dd HH:mm:ss")
-                Status = "Success"
-                Details = "Updates successfully synchronized"
-            },
-            [PSCustomObject]@{
-                Date = $currentDate.AddDays(-5).ToString("yyyy-MM-dd HH:mm:ss")
-                Status = "Error"
-                Details = "Unable to connect to the WSUS server"
-            },
-            [PSCustomObject]@{
-                Date = $currentDate.AddDays(-7).ToString("yyyy-MM-dd HH:mm:ss")
-                Status = "Success"
-                Details = "Updates successfully synchronized"
+                Date    = $wuEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+                Status  = if ($wuEvent.Id -eq 26) { "Success" } else { "Error" }
+                Details = ($wuEvent.Message -split "`r?`n")[0]
             }
-        )
+        }
         
-        return $syncHistory
+        if (-not $syncHistory) {
+            return @([PSCustomObject]@{
+                Date    = "-"
+                Status  = "-"
+                Details = "Keine Einträge im Ereignisprotokoll gefunden"
+            })
+        }
+        return @($syncHistory)
     } catch {
         Write-Error "Error fetching WSUS sync history: $_"
         return @()
@@ -2740,24 +2934,15 @@ function Set-WSUSSyncSettings {
             # Automatische Updates aktivieren
             Set-ItemProperty -Path $auRegPath -Name "NoAutoUpdate" -Value 0 -Type DWord
             
-            # Synchronisierungsintervall setzen
-            switch ($SyncInterval) {
-                "Täglich" {
-                    # Tägliche Synchronisierung
-                    Set-ItemProperty -Path $auRegPath -Name "DetectionFrequency" -Value 1 -Type DWord
-                }
-                "Wöchentlich" {
-                    # Wöchentliche Synchronisierung
-                    Set-ItemProperty -Path $auRegPath -Name "DetectionFrequency" -Value 7 -Type DWord
-                }
-                "Monatlich" {
-                    # Monatliche Synchronisierung (approximiert als 30 Tage)
-                    Set-ItemProperty -Path $auRegPath -Name "DetectionFrequency" -Value 30 -Type DWord
-                }
-                default {
-                    # Standard Windows-Einstellung (automatisch)
-                    Remove-ItemProperty -Path $auRegPath -Name "DetectionFrequency" -ErrorAction SilentlyContinue
-                }
+            # Erkennungsintervall setzen. Die Richtlinie "DetectionFrequency" erwartet STUNDEN (1-22)
+            # und wirkt nur zusammen mit DetectionFrequencyEnabled = 1. Längere Intervalle sind nicht möglich.
+            if ($SyncInterval -match '^(Daily|Täglich|Weekly|Wöchentlich|Monthly|Monatlich)') {
+                Set-ItemProperty -Path $auRegPath -Name "DetectionFrequencyEnabled" -Value 1 -Type DWord
+                Set-ItemProperty -Path $auRegPath -Name "DetectionFrequency" -Value 22 -Type DWord
+            } else {
+                # Standard Windows-Einstellung (automatisch)
+                Remove-ItemProperty -Path $auRegPath -Name "DetectionFrequency" -ErrorAction SilentlyContinue
+                Remove-ItemProperty -Path $auRegPath -Name "DetectionFrequencyEnabled" -ErrorAction SilentlyContinue
             }
         } else {
             # Automatische Updates deaktivieren
@@ -2810,6 +2995,10 @@ function Reset-WindowsUpdateComponents {
         
         # Dienste stoppen
         $services = @('wuauserv', 'cryptSvc', 'bits', 'msiserver', 'appidsvc', 'trustedinstaller')
+        
+        # Alle BITS-Jobs löschen (solange der BITS-Dienst noch läuft)
+        Get-BitsTransfer -AllUsers -ErrorAction SilentlyContinue | Remove-BitsTransfer -ErrorAction SilentlyContinue
+        
         foreach ($service in $services) {
             Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
         }
@@ -2829,16 +3018,13 @@ function Reset-WindowsUpdateComponents {
         # Sicherstellen, dass Windows Update-Ordner wieder erstellt werden
         New-Item -Path "$env:SystemRoot\SoftwareDistribution" -ItemType Directory -Force | Out-Null
         
-        # Alle BITS-Jobs löschen
-        Get-BitsTransfer -AllUsers | Remove-BitsTransfer -ErrorAction SilentlyContinue
-        
         # Dienste wieder starten
         foreach ($service in $services) {
             Start-Service -Name $service -ErrorAction SilentlyContinue
         }
         
         # Update-Erkennung erzwingen
-        wuauclt.exe /resetauthorization /detectnow
+        Start-UpdateDetection -ResetAuthorization
         
         Update-StatusText -Text "Windows Update-Komponenten wurden zurückgesetzt. System sollte neu gestartet werden." -Color "Green"
         return $true
@@ -2853,13 +3039,10 @@ function Repair-WindowsSystemFiles {
     try {
         Update-StatusText -Text "Überprüfe Windows-Systemdateien..." -Color "Blue"
         
-        # DISM zum Reparieren des Windows-Images verwenden
-        Start-Process -FilePath "DISM.exe" -ArgumentList "/Online", "/Cleanup-Image", "/RestoreHealth" -Wait -NoNewWindow
+        # DISM und SFC in einem eigenen Konsolenfenster ausführen (kann 30+ Minuten dauern, GUI bleibt bedienbar)
+        Start-ConsoleTool -Title 'easyWINUpdate - DISM und SFC' -CommandLine 'DISM.exe /Online /Cleanup-Image /RestoreHealth & sfc.exe /scannow'
         
-        # SFC zum Überprüfen und Reparieren von Systemdateien verwenden
-        Start-Process -FilePath "sfc.exe" -ArgumentList "/scannow" -Wait -NoNewWindow
-        
-        Update-StatusText -Text "Windows-Systemdateien wurden überprüft und repariert." -Color "Green"
+        Update-StatusText -Text "DISM /RestoreHealth und SFC /scannow wurden in einem separaten Konsolenfenster gestartet." -Color "Green"
         return $true
     } catch {
         Update-StatusText -Text "Fehler bei der Überprüfung der Windows-Systemdateien: $_" -Color "Red"
@@ -2941,13 +3124,13 @@ function Clear-StuckUpdatesAndBITSJobs {
         Update-StatusText -Text "Entferne hängende Updates und BITS-Jobs..." -Color "Blue"
         
         # Alle BITS-Jobs löschen
-        Get-BitsTransfer -AllUsers | Remove-BitsTransfer
+        Get-BitsTransfer -AllUsers -ErrorAction SilentlyContinue | Remove-BitsTransfer -ErrorAction SilentlyContinue
         
         # Gestagte Windows Update-Pakete entfernen
         $stagedUpdates = Get-WindowsPackage -Online | Where-Object { $_.PackageState -eq 'Staged' }
         if ($stagedUpdates) {
             foreach ($update in $stagedUpdates) {
-                Remove-WindowsPackage -PackageName $update.PackageName -Online -NoRestart
+                Remove-WindowsPackage -PackageName $update.PackageName -Online -NoRestart | Out-Null
             }
         }
         
@@ -2956,7 +3139,7 @@ function Clear-StuckUpdatesAndBITSJobs {
         Restart-Service -Name bits -Force
         
         # Update-Erkennung erzwingen
-        wuauclt.exe /detectnow
+        Start-UpdateDetection
         
         Update-StatusText -Text "Hängende Updates und BITS-Jobs wurden entfernt." -Color "Green"
         return $true
@@ -3023,19 +3206,28 @@ function Load-UpdateStatusPage {
             }
         }
         
+        # Installierte Updates nur einmal abfragen (Get-HotFix/WMI ist langsam)
+        $installedHotfixes = @()
+        $hotfixError = $null
+        try {
+            $installedHotfixes = @(Get-HotFix -ErrorAction Stop)
+        } catch {
+            $hotfixError = $_
+            Write-Host "Fehler beim Abrufen der installierten Updates: $_" -ForegroundColor Yellow
+        }
+        
         # Letztes Update ermitteln
         $txtLastUpdate = $window.FindName("txtLastUpdate")
         if ($txtLastUpdate) {
-            try {
-                $lastUpdate = Get-HotFix | Sort-Object -Property InstalledOn -Descending | Select-Object -First 1 -ExpandProperty InstalledOn
+            if ($hotfixError) {
+                $txtLastUpdate.Text = "Fehler beim Abrufen der Update-Historie"
+            } else {
+                $lastUpdate = $installedHotfixes | Where-Object { $_.InstalledOn } | Sort-Object -Property InstalledOn -Descending | Select-Object -First 1 -ExpandProperty InstalledOn
                 if ($lastUpdate) {
-                    $txtLastUpdate.Text = $lastUpdate.ToString("dd.MM.yyyy HH:mm")
+                    $txtLastUpdate.Text = $lastUpdate.ToString("dd.MM.yyyy")
                 } else {
                     $txtLastUpdate.Text = "Keine Updates gefunden"
                 }
-            } catch {
-                $txtLastUpdate.Text = "Fehler beim Abrufen der Update-Historie"
-                Write-Host "Fehler beim Ermitteln des letzten Updates: $_" -ForegroundColor Yellow
             }
         }
         
@@ -3058,12 +3250,10 @@ function Load-UpdateStatusPage {
         # Anzahl installeder Updates ermitteln
         $txtInstalledUpdatesCount = $window.FindName("txtInstalledUpdatesCount")
         if ($txtInstalledUpdatesCount) {
-            try {
-                $updates = Get-HotFix
-                $txtInstalledUpdatesCount.Text = "$($updates.Count) Updates installed"
-            } catch {
+            if ($hotfixError) {
                 $txtInstalledUpdatesCount.Text = "Fehler beim Abrufen der Update-Informationen"
-                Write-Host "Fehler beim Ermitteln der installeden Updates: $_" -ForegroundColor Yellow
+            } else {
+                $txtInstalledUpdatesCount.Text = "$($installedHotfixes.Count) Updates installed"
             }
         }
         
@@ -3086,55 +3276,35 @@ function Load-InstalledUpdatesPage {
     # Temporäre Anzeige während des Ladens
     Update-StatusText -Text "Loading installed updates..." -Color "Blue"
     
-    # Initialisiere ein Runspace für Hintergrundverarbeitung
-    $runspace = [runspacefactory]::CreateRunspace()
-    $runspace.ApartmentState = "STA"
-    $runspace.ThreadOptions = "ReuseThread"
-    $runspace.Open()
-    
-    # Erstelle PowerShell-Instanz
-    $psCmd = [PowerShell]::Create()
-    $psCmd.Runspace = $runspace
-    
-    # Synchronisierungsobjekt für Datenaustausch
-    $syncHash = [hashtable]::Synchronized(@{})
-    $syncHash.Window = $window
-    $syncHash.UpdateStatusText = ${function:Update-StatusText}
-    $runspace.SessionStateProxy.SetVariable("syncHash", $syncHash)
-    
-    # Skriptblock für Runspace
-    [void]$psCmd.AddScript({
-        # Hole tatsächlich installede Updates direkt vom System
-        $hotfixes = Get-HotFix | Select-Object HotFixID, Description, InstalledOn, InstalledBy
+    # Get-HotFix im Hintergrund ausführen, damit die GUI nicht blockiert
+    Start-BackgroundTask -Name 'Installierte Updates laden' -ScriptBlock {
+        Get-HotFix | Select-Object HotFixID, Description, InstalledOn, InstalledBy
+    } -OnCompleted {
+        param($Output, $ErrorText)
+        $dgInstalledUpdates = $window.FindName("dgInstalledUpdates")
+        $progressUpdates = $window.FindName("progressInstalledUpdates")
+        $progressUpdates.Visibility = "Collapsed"
         
-        # UI-Update im richtigen Thread 
-        $syncHash.Window.Dispatcher.Invoke([Action]{
-            $dgInstalledUpdates = $syncHash.Window.FindName("dgInstalledUpdates")
-            $progressUpdates = $syncHash.Window.FindName("progressInstalledUpdates")
-            
-            if ($hotfixes -and $hotfixes.Count -gt 0) {
-                $dgInstalledUpdates.ItemsSource = $hotfixes
-                # Statustext aktualisieren
-                $statusText = $syncHash.Window.FindName("statusText")
-                $statusText.Text = "$($hotfixes.Count) installed updates loaded."
-                $statusText.Foreground = "Green"
-            } else {
-                # Statustext aktualisieren
-                $statusText = $syncHash.Window.FindName("statusText")
-                $statusText.Text = "No installed updates found."
-                $statusText.Foreground = "Blue"
-            }
-            
-            $progressUpdates.Visibility = "Collapsed"
-        })
-    })
-    
-    # Starte asynchrone Ausführung
-    [void]$psCmd.BeginInvoke()
+        $hotfixes = @($Output | Where-Object { $_ })
+        $script:InstalledUpdatesCache = $hotfixes
+        if ($hotfixes.Count -gt 0) {
+            $dgInstalledUpdates.ItemsSource = $hotfixes
+            Update-StatusText -Text "$($hotfixes.Count) installed updates loaded." -Color "Green"
+        } elseif ($ErrorText) {
+            Update-StatusText -Text "Fehler beim Laden der installierten Updates: $ErrorText" -Color "Red"
+        } else {
+            Update-StatusText -Text "No installed updates found." -Color "Blue"
+        }
+    }
 }
 
-# Funktion zum Laden der verfügbaren Updates-Seite
+# Funktion zum Laden der verfügbaren Updates-Seite (echte Suche über die Windows Update Agent API)
 function Load-AvailableUpdatesPage {
+    if ($script:AvailableUpdatesSearchRunning) {
+        Update-StatusText -Text "Eine Update-Suche läuft bereits..." -Color "Yellow"
+        return
+    }
+
     $chkCriticalUpdates = $window.FindName("chkCriticalUpdates")
     $chkSecurityUpdates = $window.FindName("chkSecurityUpdates")
     $chkDefinitionUpdates = $window.FindName("chkDefinitionUpdates")
@@ -3146,113 +3316,76 @@ function Load-AvailableUpdatesPage {
     # UI vorbereiten
     $progressUpdates.Visibility = "Visible"
     $dgAvailableUpdates.ItemsSource = $null
-    Update-StatusText -Text "Searching for available updates..." -Color "Blue"
+    Update-StatusText -Text "Searching for available updates (this can take several minutes)..." -Color "Blue"
+    $script:AvailableUpdatesSearchRunning = $true
     
-    # Parameter für die Suche
-    $includeCritical = $chkCriticalUpdates.IsChecked
-    $includeSecurity = $chkSecurityUpdates.IsChecked
-    $includeDefinition = $chkDefinitionUpdates.IsChecked
-    $includeFeature = $chkFeatureUpdates.IsChecked
+    $searchParameters = @{
+        IncludeCritical   = [bool]$chkCriticalUpdates.IsChecked
+        IncludeSecurity   = [bool]$chkSecurityUpdates.IsChecked
+        IncludeDefinition = [bool]$chkDefinitionUpdates.IsChecked
+        IncludeFeature    = [bool]$chkFeatureUpdates.IsChecked
+    }
     
-    # Initialisiere ein Runspace für Hintergrundverarbeitung
-    $runspace = [runspacefactory]::CreateRunspace()
-    $runspace.ApartmentState = "STA"
-    $runspace.ThreadOptions = "ReuseThread"
-    $runspace.Open()
-    
-    # Erstelle PowerShell-Instanz
-    $psCmd = [PowerShell]::Create()
-    $psCmd.Runspace = $runspace
-    
-    # Synchronisierungsobjekt für Datenaustausch
-    $syncHash = [hashtable]::Synchronized(@{})
-    $syncHash.Window = $window
-    $syncHash.IncludeCritical = $includeCritical
-    $syncHash.IncludeSecurity = $includeSecurity
-    $syncHash.IncludeDefinition = $includeDefinition
-    $syncHash.IncludeFeature = $includeFeature
-    $runspace.SessionStateProxy.SetVariable("syncHash", $syncHash)
-    
-    # Füge Add-Type für COM-Objekte hinzu
-    [void]$psCmd.AddScript({
-        # In diesem Block simulieren wir das Abrufen von verfügbaren Updates
-        # Dies ist eine vereinfachte Version, da die eigentliche Funktion COM-Objekte verwendet
+    Start-FunctionInBackground -FunctionName 'Get-AvailableWindowsUpdates' -FunctionParameters $searchParameters -OnCompleted {
+        param($Output, $ErrorText)
+        $script:AvailableUpdatesSearchRunning = $false
+        $dgAvailableUpdates = $window.FindName("dgAvailableUpdates")
+        $progressUpdates = $window.FindName("progressAvailableUpdates")
+        $progressUpdates.Visibility = "Collapsed"
         
-        # COM-Objektbenutzung für Windows Update-Suche simulieren
-        Start-Sleep -Seconds 2  # Simuliere Suchzeit
-        
-        # Erzeuge Beispieldaten für verfügbare Updates
-        $updates = @()
-        
-        # Wenn kritische Updates eingeschlossen sind
-        if ($syncHash.IncludeCritical) {
-            $updates += [PSCustomObject]@{
-                Title = "Security Update for Windows (KB4580325)"
-                Description = "Critical security update"
-                Category = "Critical"
-                Size = "45.5 MB"
-                Status = "Ready to install"
-            }
+        $updates = @($Output | Where-Object { $_ -and $_.PSObject.Properties['Identity'] })
+        $dgAvailableUpdates.ItemsSource = $updates
+        if ($updates.Count -gt 0) {
+            Update-StatusText -Text "$($updates.Count) available updates found." -Color "Green"
+        } elseif ($ErrorText) {
+            Update-StatusText -Text "Fehler bei der Update-Suche: $ErrorText" -Color "Red"
+        } else {
+            Update-StatusText -Text "No available updates found." -Color "Blue"
         }
-        
-        # Wenn Sicherheitsupdates eingeschlossen sind
-        if ($syncHash.IncludeSecurity) {
-            $updates += [PSCustomObject]@{
-                Title = "Cumulative Security Update (KB4579311)"
-                Description = "Addresses security issues"
-                Category = "Security"
-                Size = "112.3 MB"
-                Status = "Ready to install"
-            }
+    }
+}
+
+# Installiert bzw. lädt Updates (PSWindowsUpdate) im Hintergrund
+function Start-UpdateInstallation {
+    param (
+        [string[]]$UpdateIds = @(),
+        [switch]$DownloadOnly,
+        [string]$Description = "Updates"
+    )
+
+    if ($script:UpdateInstallationRunning) {
+        Update-StatusText -Text "Es läuft bereits eine Installation bzw. ein Download." -Color "Yellow"
+        return
+    }
+    $script:UpdateInstallationRunning = $true
+
+    $progressUpdates = $window.FindName("progressUpdates")
+    $progressUpdates.IsIndeterminate = $true
+    $progressUpdates.Visibility = "Visible"
+    $action = if ($DownloadOnly) { "Lade" } else { "Installiere" }
+    Update-StatusText -Text "$action $Description..." -Color "Blue"
+
+    Start-BackgroundTask -Name "$action $Description" -Parameters @{ UpdateIds = $UpdateIds; DownloadOnly = [bool]$DownloadOnly } -ScriptBlock {
+        param([string[]]$UpdateIds, [bool]$DownloadOnly)
+        Import-Module PSWindowsUpdate -ErrorAction Stop
+        $wuParams = @{ AcceptAll = $true; Confirm = $false; ErrorAction = 'Stop' }
+        if ($UpdateIds -and $UpdateIds.Count -gt 0) { $wuParams.UpdateID = $UpdateIds }
+        if ($DownloadOnly) { $wuParams.Download = $true } else { $wuParams.Install = $true; $wuParams.IgnoreReboot = $true }
+        Get-WindowsUpdate @wuParams | Select-Object -Property KB, Result, Title
+    } -OnCompleted {
+        param($Output, $ErrorText)
+        $script:UpdateInstallationRunning = $false
+        $progressUpdates = $window.FindName("progressUpdates")
+        $progressUpdates.Visibility = "Collapsed"
+        if ($ErrorText) {
+            Update-StatusText -Text "Fehler bei der Update-Verarbeitung: $ErrorText" -Color "Red"
+        } else {
+            $processed = @($Output | Where-Object { $_ })
+            Update-StatusText -Text "Update-Verarbeitung abgeschlossen ($($processed.Count) Einträge). Ein Neustart kann erforderlich sein." -Color "Green"
+            foreach ($entry in $processed) { Write-AppLog -Message "Update: $($entry.KB) - $($entry.Result) - $($entry.Title)" }
         }
-        
-        # Wenn Definitionsupdates eingeschlossen sind
-        if ($syncHash.IncludeDefinition) {
-            $updates += [PSCustomObject]@{
-                Title = "Windows Defender Definition Update (KB4052623)"
-                Description = "Updates malware definitions"
-                Category = "Definition"
-                Size = "83.7 MB"
-                Status = "Ready to install"
-            }
-        }
-        
-        # Wenn Feature-Updates eingeschlossen sind
-        if ($syncHash.IncludeFeature) {
-            $updates += [PSCustomObject]@{
-                Title = "Feature Update to Windows 11 (KB5000741)"
-                Description = "Major feature update"
-                Category = "Feature"
-                Size = "3.2 GB"
-                Status = "Ready to install"
-            }
-        }
-        
-        # UI-Update im richtigen Thread
-        $syncHash.Window.Dispatcher.Invoke([Action]{
-            $dgAvailableUpdates = $syncHash.Window.FindName("dgAvailableUpdates")
-            $progressUpdates = $syncHash.Window.FindName("progressAvailableUpdates")
-            
-            if ($updates -and $updates.Count -gt 0) {
-                $dgAvailableUpdates.ItemsSource = $updates
-                # Statustext aktualisieren
-                $statusText = $syncHash.Window.FindName("statusText")
-                $statusText.Text = "$($updates.Count) available updates found."
-                $statusText.Foreground = "Green"
-            } else {
-                $dgAvailableUpdates.ItemsSource = @()
-                # Statustext aktualisieren
-                $statusText = $syncHash.Window.FindName("statusText")
-                $statusText.Text = "No available updates found."
-                $statusText.Foreground = "Blue"
-            }
-            
-            $progressUpdates.Visibility = "Collapsed"
-        })
-    })
-    
-    # Starte asynchrone Ausführung
-    [void]$psCmd.BeginInvoke()
+        Load-AvailableUpdatesPage
+    }
 }
 
 # Funktion zum Laden der WSUS-Einstellungen-Seite
@@ -3360,11 +3493,25 @@ function Load-WSUSSettingsPage {
     try {
         # Versuch, die letzte Aktualisierungszeit aus dem WindowsUpdate-Protokoll zu lesen
         $lastDetectionTime = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect" -Name "LastSuccessTime" -ErrorAction SilentlyContinue
-        
+        $lastCheckText = $null
         if ($lastDetectionTime) {
-            $txtWSUSLastCheck.Text = $lastDetectionTime.LastSuccessTime
+            $lastCheckText = [string]$lastDetectionTime.LastSuccessTime
+        } else {
+            # Windows 10/11: Registry-Wert existiert nicht mehr -> Windows Update Agent COM-API verwenden
+            try {
+                $lastSearch = (New-Object -ComObject Microsoft.Update.AutoUpdate).Results.LastSearchSuccessDate
+                if ($lastSearch -and $lastSearch -gt [datetime]'2000-01-01') {
+                    $lastCheckText = ([datetime]$lastSearch).ToLocalTime().ToString("dd.MM.yyyy HH:mm")
+                }
+            } catch {
+                Write-Verbose "LastSearchSuccessDate nicht verfügbar: $($_.Exception.Message)"
+            }
+        }
+        
+        if ($lastCheckText) {
+            $txtWSUSLastCheck.Text = $lastCheckText
             if ($txtLastSyncTime) {
-                $txtLastSyncTime.Text = $lastDetectionTime.LastSuccessTime
+                $txtLastSyncTime.Text = $lastCheckText
             }
         } else {
             $txtWSUSLastCheck.Text = "Not available"
@@ -3397,8 +3544,14 @@ function Load-WSUSSettingsPage {
             
             $cmbInstallTime = $window.FindName("cmbInstallTime")
             if ($cmbInstallTime) {
-                # Installationszeit entsprechend umwandeln (0-23 zu Index im ComboBox)
-                $timeIndex = [Math]::Min([Math]::Max(0, $gpoSettings.InstallTime - 3), 5)
+                # Installationszeit (Stunde 0-23) dem passenden ComboBox-Eintrag zuordnen
+                $timeIndex = 0
+                for ($i = 0; $i -lt $cmbInstallTime.Items.Count; $i++) {
+                    if ([string]$cmbInstallTime.Items[$i].Content -eq ('{0:D2}:00' -f [int]$gpoSettings.InstallTime)) {
+                        $timeIndex = $i
+                        break
+                    }
+                }
                 $cmbInstallTime.SelectedIndex = $timeIndex
             }
             
@@ -3423,13 +3576,8 @@ function Load-WSUSSettingsPage {
             $detectionFrequency = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" -Name "DetectionFrequency" -ErrorAction SilentlyContinue
             
             if ($detectionFrequency) {
-                # Basierend auf dem DetectionFrequency-Wert den Index setzen
-                $syncInterval.SelectedIndex = switch ($detectionFrequency.DetectionFrequency) {
-                    1 { 1 } # Täglich
-                    { $_ -ge 2 -and $_ -le 7 } { 2 } # Wöchentlich
-                    { $_ -gt 7 } { 3 } # Monatlich
-                    default { 0 } # Automatisch
-                }
+                # DetectionFrequency (Stunden, 1-22) entspricht hier dem Intervall "Daily"
+                $syncInterval.SelectedIndex = 1
             } else {
                 $syncInterval.SelectedIndex = 0 # Automatisch
             }
@@ -3494,56 +3642,56 @@ function Initialize-UpdateScheduleControls {
     try {
         # ComboBox für Wochentage befüllen
         $cmbWeekDay = $window.FindName("cmbWeekDay")
-        if ($cmbWeekDay) {
+        if ($cmbWeekDay -and $cmbWeekDay.Items.Count -eq 0) {
             $weekdays = @("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
             foreach ($day in $weekdays) {
                 $item = New-Object System.Windows.Controls.ComboBoxItem
                 $item.Content = $day
-                $cmbWeekDay.Items.Add($item)
+                [void]$cmbWeekDay.Items.Add($item)
             }
         }
         
         # ComboBox für Tage des Monats befüllen
         $cmbMonthDay = $window.FindName("cmbMonthDay")
-        if ($cmbMonthDay) {
+        if ($cmbMonthDay -and $cmbMonthDay.Items.Count -eq 0) {
             for ($i = 1; $i -le 31; $i++) {
                 $item = New-Object System.Windows.Controls.ComboBoxItem
                 $item.Content = "$i"
-                $cmbMonthDay.Items.Add($item)
+                [void]$cmbMonthDay.Items.Add($item)
             }
         }
         
         # ComboBox für Stunden befüllen
         $cmbHour = $window.FindName("cmbHour")
         $cmbRestartHour = $window.FindName("cmbRestartHour")
-        if ($cmbHour -and $cmbRestartHour) {
+        if ($cmbHour -and $cmbRestartHour -and $cmbHour.Items.Count -eq 0) {
             for ($i = 0; $i -le 23; $i++) {
                 $hourStr = $i.ToString("00")
                 
                 $item = New-Object System.Windows.Controls.ComboBoxItem
                 $item.Content = $hourStr
-                $cmbHour.Items.Add($item)
+                [void]$cmbHour.Items.Add($item)
                 
                 $itemRestart = New-Object System.Windows.Controls.ComboBoxItem
                 $itemRestart.Content = $hourStr
-                $cmbRestartHour.Items.Add($itemRestart)
+                [void]$cmbRestartHour.Items.Add($itemRestart)
             }
         }
         
         # ComboBox für Minuten befüllen
         $cmbMinute = $window.FindName("cmbMinute")
         $cmbRestartMinute = $window.FindName("cmbRestartMinute")
-        if ($cmbMinute -and $cmbRestartMinute) {
+        if ($cmbMinute -and $cmbRestartMinute -and $cmbMinute.Items.Count -eq 0) {
             for ($i = 0; $i -le 59; $i += 5) { # 5-Minuten-Intervalle
                 $minuteStr = $i.ToString("00")
                 
                 $item = New-Object System.Windows.Controls.ComboBoxItem
                 $item.Content = $minuteStr
-                $cmbMinute.Items.Add($item)
+                [void]$cmbMinute.Items.Add($item)
                 
                 $itemRestart = New-Object System.Windows.Controls.ComboBoxItem
                 $itemRestart.Content = $minuteStr
-                $cmbRestartMinute.Items.Add($itemRestart)
+                [void]$cmbRestartMinute.Items.Add($itemRestart)
             }
         }
         
@@ -3614,6 +3762,12 @@ function Initialize-UpdateScheduleControls {
         # Event-Handler für bedingte Anzeige
         if ($cmbUpdateScheduleType) {
             $cmbUpdateScheduleType.Add_SelectionChanged({
+                # Lokale Variablen der Init-Funktion existieren zur Laufzeit des Events nicht mehr -> neu suchen
+                $cmbUpdateScheduleType = $window.FindName("cmbUpdateScheduleType")
+                $lblWeekDay = $window.FindName("lblWeekDay")
+                $cmbWeekDay = $window.FindName("cmbWeekDay")
+                $lblMonthDay = $window.FindName("lblMonthDay")
+                $cmbMonthDay = $window.FindName("cmbMonthDay")
                 if ($cmbUpdateScheduleType.SelectedIndex -eq 1) { # Wöchentlich
                     if ($lblWeekDay) { $lblWeekDay.Visibility = [System.Windows.Visibility]::Visible }
                     if ($cmbWeekDay) { $cmbWeekDay.Visibility = [System.Windows.Visibility]::Visible }
@@ -3637,6 +3791,8 @@ function Initialize-UpdateScheduleControls {
         
         if ($cmbRestartBehavior) {
             $cmbRestartBehavior.Add_SelectionChanged({
+                $cmbRestartBehavior = $window.FindName("cmbRestartBehavior")
+                $pnlRestartTime = $window.FindName("pnlRestartTime")
                 if ($cmbRestartBehavior.SelectedIndex -eq 2 -and $pnlRestartTime) { # Neustart planen für
                     $pnlRestartTime.Visibility = [System.Windows.Visibility]::Visible
                 }
@@ -3646,16 +3802,6 @@ function Initialize-UpdateScheduleControls {
             })
         }
 
-        $radSchedule = $window.FindName("radSchedule")
-        if ($radSchedule) {
-            $radSchedule.Add_Click({
-                $schedulePage = $window.FindName("schedulePage")
-                if ($schedulePage) {
-                    SwitchPage -newPage $schedulePage
-                }
-            })
-        }
-        
         # Event-Handler für den Button "Zeitplan anwenden"
         $btnApplySchedule = $window.FindName("btnApplySchedule")
         if ($btnApplySchedule) {
@@ -3676,8 +3822,9 @@ function Initialize-UpdateScheduleControls {
         $chkEnableAutoUpdates = $window.FindName("chkEnableAutoUpdates")
         if ($chkEnableAutoUpdates) {
             # Aktuellen Status der automatischen Updates abfragen und CheckBox entsprechend setzen
-            $autoUpdateEnabled = Get-AutoUpdateStatus
-            $chkEnableAutoUpdates.IsChecked = $autoUpdateEnabled
+            # Get-AutoUpdateStatus liefert Text; nur "Deactivated" bedeutet deaktiviert
+            $autoUpdateStatus = Get-AutoUpdateStatus
+            $chkEnableAutoUpdates.IsChecked = ($autoUpdateStatus -ne "Deactivated")
             
             # Event-Handler für die CheckBox
             $chkEnableAutoUpdates.Add_Checked({
@@ -3694,9 +3841,72 @@ function Initialize-UpdateScheduleControls {
     }
 }
 
+# Name der geplanten Aufgabe (einheitlich für Anlegen, Anzeigen und Löschen)
+$script:ScheduledTaskName = "easyWINUpdate_Task"
+$script:LegacyScheduledTaskNames = @("EasyWINUpdate_Scheduled_Task")
+$script:ScheduledTaskDirectory = Join-Path $env:ProgramData 'easyWINUpdate'
+
+# Liefert die geplante Aufgabe (Task Scheduler COM-API, sprachunabhängig) oder $null
+function Get-EasyWUScheduledTask {
+    try {
+        $taskService = New-Object -ComObject Schedule.Service
+        $taskService.Connect()
+        return $taskService.GetFolder('\').GetTask($script:ScheduledTaskName)
+    } catch {
+        return $null
+    }
+}
+
+# Entfernt die geplante Aufgabe (inkl. Altnamen früherer Versionen)
+function Remove-EasyWUScheduledTask {
+    $removed = $false
+    try {
+        $taskService = New-Object -ComObject Schedule.Service
+        $taskService.Connect()
+        $rootFolder = $taskService.GetFolder('\')
+        foreach ($name in @($script:ScheduledTaskName) + $script:LegacyScheduledTaskNames) {
+            try {
+                $rootFolder.DeleteTask($name, 0)
+                $removed = $true
+            } catch {
+                Write-Verbose "Geplante Aufgabe '$name' nicht vorhanden."
+            }
+        }
+    } catch {
+        Write-AppLog -Message "Aufgabenplanung nicht erreichbar: $($_.Exception.Message)" -Level 'WARN'
+    }
+    return $removed
+}
+
+# Verzeichnis für das als SYSTEM ausgeführte Skript anlegen und auf SYSTEM/Administratoren beschränken
+# (verhindert, dass normale Benutzer das Skript manipulieren und so Code als SYSTEM ausführen)
+function Initialize-ProtectedTaskDirectory {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -Path $Path -ItemType Directory -Force | Out-Null
+    }
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $identity = New-Object System.Security.Principal.SecurityIdentifier($sid)
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', $inheritance, [System.Security.AccessControl.PropagationFlags]::None, 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
 # Funktion zum Setzen des Windows Update Zeitplans
 function Set-WindowsUpdateSchedule {
     try {
+        if (-not $script:IsAdmin) {
+            Update-StatusText -Text "Zum Anlegen des Zeitplans sind Administratorrechte erforderlich." -Color "Red"
+            return
+        }
+
         # Werte aus der GUI auslesen
         $chkEnableAutoUpdates = $window.FindName("chkEnableAutoUpdates")
         if (-not $chkEnableAutoUpdates -or -not $chkEnableAutoUpdates.IsChecked) {
@@ -3716,103 +3926,130 @@ function Set-WindowsUpdateSchedule {
         $cmbRestartMinute = $window.FindName("cmbRestartMinute")
         
         # Prüfen ob alle benötigten Elemente vorhanden und ausgewählt sind
-        if (-not $cmbUpdateScheduleType -or $cmbUpdateScheduleType.SelectedItem -eq $null -or
-            -not $cmbHour -or $cmbHour.SelectedItem -eq $null -or
-            -not $cmbMinute -or $cmbMinute.SelectedItem -eq $null -or
-            -not $cmbUpdateBehavior -or $cmbUpdateBehavior.SelectedItem -eq $null -or
-            -not $cmbRestartBehavior -or $cmbRestartBehavior.SelectedItem -eq $null) {
+        if (-not $cmbUpdateScheduleType -or $null -eq $cmbUpdateScheduleType.SelectedItem -or
+            -not $cmbHour -or $null -eq $cmbHour.SelectedItem -or
+            -not $cmbMinute -or $null -eq $cmbMinute.SelectedItem -or
+            -not $cmbUpdateBehavior -or $null -eq $cmbUpdateBehavior.SelectedItem -or
+            -not $cmbRestartBehavior -or $null -eq $cmbRestartBehavior.SelectedItem) {
             Update-StatusText -Text "Please select all required schedule options." -Color "Yellow"
             return
         }
         
-        # Werte extrahieren
-        $scheduleType = $cmbUpdateScheduleType.SelectedItem.Content
-        $weekDay = if ($cmbWeekDay -and $cmbWeekDay.SelectedItem -ne $null) { $cmbWeekDay.SelectedItem.Content } else { "Monday" }
-        $monthDay = if ($cmbMonthDay -and $cmbMonthDay.SelectedItem -ne $null) { $cmbMonthDay.SelectedItem.Content } else { "1" }
-        $hour = $cmbHour.SelectedItem.Content
-        $minute = $cmbMinute.SelectedItem.Content
-        $updateBehavior = $cmbUpdateBehavior.SelectedItem.Content
-        $restartBehavior = $cmbRestartBehavior.SelectedItem.Content
-        $restartHour = if ($cmbRestartHour -and $cmbRestartHour.SelectedItem -ne $null) { $cmbRestartHour.SelectedItem.Content } else { "03" }
-        $restartMinute = if ($cmbRestartMinute -and $cmbRestartMinute.SelectedItem -ne $null) { $cmbRestartMinute.SelectedItem.Content } else { "00" }
+        # Werte extrahieren (Auswertung über den Index, unabhängig vom angezeigten Text)
+        $scheduleIndex = $cmbUpdateScheduleType.SelectedIndex          # 0 = Daily, 1 = Weekly, 2 = Monthly
+        $scheduleType = [string]$cmbUpdateScheduleType.SelectedItem.Content
+        $weekDayIndex = if ($cmbWeekDay -and $cmbWeekDay.SelectedIndex -ge 0) { $cmbWeekDay.SelectedIndex } else { 0 }
+        $weekDay = if ($cmbWeekDay -and $null -ne $cmbWeekDay.SelectedItem) { [string]$cmbWeekDay.SelectedItem.Content } else { "Monday" }
+        $monthDay = if ($cmbMonthDay -and $null -ne $cmbMonthDay.SelectedItem) { [int]$cmbMonthDay.SelectedItem.Content } else { 1 }
+        $hour = [int]$cmbHour.SelectedItem.Content
+        $minute = [int]$cmbMinute.SelectedItem.Content
+        $updateBehaviorIndex = $cmbUpdateBehavior.SelectedIndex        # 0 = suchen, 1 = herunterladen, 2 = installieren
+        $updateBehavior = [string]$cmbUpdateBehavior.SelectedItem.Content
+        $restartBehaviorIndex = $cmbRestartBehavior.SelectedIndex      # 0 = benachrichtigen, 1 = automatisch, 2 = geplant
+        $restartBehavior = [string]$cmbRestartBehavior.SelectedItem.Content
+        $restartHour = if ($cmbRestartHour -and $null -ne $cmbRestartHour.SelectedItem) { [int]$cmbRestartHour.SelectedItem.Content } else { 3 }
+        $restartMinute = if ($cmbRestartMinute -and $null -ne $cmbRestartMinute.SelectedItem) { [int]$cmbRestartMinute.SelectedItem.Content } else { 0 }
+        
+        # PSWindowsUpdate muss für SYSTEM erreichbar sein (AllUsers-Installation)
+        $wuModule = Get-Module -ListAvailable -Name PSWindowsUpdate | Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $wuModule -or -not ($wuModule.ModuleBase.StartsWith($env:ProgramFiles, [StringComparison]::OrdinalIgnoreCase) -or
+                                     $wuModule.ModuleBase.StartsWith($env:SystemRoot, [StringComparison]::OrdinalIgnoreCase))) {
+            $installAnswer = [System.Windows.MessageBox]::Show(
+                "Das Modul PSWindowsUpdate ist nur für den aktuellen Benutzer installiert. Die geplante Aufgabe läuft als SYSTEM und kann es so nicht laden.`r`n`r`nSoll PSWindowsUpdate jetzt für alle Benutzer installiert werden?",
+                "PSWindowsUpdate",
+                [System.Windows.MessageBoxButton]::YesNo,
+                [System.Windows.MessageBoxImage]::Question
+            )
+            if ($installAnswer -ne [System.Windows.MessageBoxResult]::Yes) {
+                Update-StatusText -Text "Zeitplan nicht angelegt: PSWindowsUpdate ist nicht für alle Benutzer installiert." -Color "Yellow"
+                return
+            }
+            Update-StatusText -Text "Installiere PSWindowsUpdate für alle Benutzer..." -Color "Blue"
+            Install-Module -Name PSWindowsUpdate -Scope AllUsers -Force -ErrorAction Stop
+        }
         
         # Aufgabenplanung konfigurieren
         Update-StatusText -Text "Configuring Windows Update schedule..." -Color "Blue"
         
-        # Aufgabennamens-Präfix
-        $taskName = "easyWINUpdate_Task"
+        # PowerShell-Skript in geschütztem Verzeichnis erstellen (nicht im beschreibbaren %TEMP% des Benutzers)
+        Initialize-ProtectedTaskDirectory -Path $script:ScheduledTaskDirectory
+        $scriptPath = Join-Path $script:ScheduledTaskDirectory 'RunWindowsUpdate.ps1'
+        $taskLogDirectory = (Join-Path $script:ScheduledTaskDirectory 'Logs') -replace "'", "''"
         
-        # Vorhandene Aufgabe löschen, falls vorhanden
-        schtasks /query /tn $taskName 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            schtasks /delete /tn $taskName /f
-        }
-        
-        # PowerShell-Skript erstellen, das die Updates ausführt
-        $scriptPath = "$env:TEMP\RunWindowsUpdate.ps1"
-        
-        # Skriptinhalt erstellen
-        $scriptContent = "Import-Module PSWindowsUpdate`n"
-        
-        # Je nach gewähltem Verhalten unterschiedliche Befehle
-        switch ($updateBehavior) {
-            "Only search for updates" {
-                $scriptContent += "Get-WindowsUpdate"
-            }
-            "Search and download" {
-                $scriptContent += "Get-WindowsUpdate -Download"
-            }
-            default { # "Search, download and install"
-                $scriptContent += "Get-WindowsUpdate -Download -Install"
-                
-                # Neustart-Verhalten konfigurieren
-                if ($restartBehavior -eq "Automatically restart") {
-                    $scriptContent += " -AutoReboot"
-                }
-                elseif ($restartBehavior -eq "Plan restart for:") {
-                    $restartTime = "$restartHour`:$restartMinute"
-                    $scriptContent += " -ScheduleReboot '$restartTime'"
+        # Je nach gewähltem Verhalten unterschiedliche Befehle (-AcceptAll verhindert Rückfragen im nicht-interaktiven Lauf)
+        $wuCommand = switch ($updateBehaviorIndex) {
+            0 { 'Get-WindowsUpdate' }
+            1 { 'Get-WindowsUpdate -Download -AcceptAll' }
+            default {
+                switch ($restartBehaviorIndex) {
+                    1 { 'Get-WindowsUpdate -Install -AcceptAll -AutoReboot' }
+                    2 { 'Get-WindowsUpdate -Install -AcceptAll -ScheduleReboot $rebootTime' }
+                    default { 'Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot' }
                 }
             }
         }
         
-        # Skript speichern
-        $scriptContent | Out-File -FilePath $scriptPath -Encoding utf8 -Force
+        $scriptContent = @"
+# Automatisch erstellt von easyWINUpdate v$($script:AppVersion) (PhinIT) am $(Get-Date -Format 'yyyy-MM-dd HH:mm')
+`$logDirectory = '$taskLogDirectory'
+if (-not (Test-Path -LiteralPath `$logDirectory)) { New-Item -Path `$logDirectory -ItemType Directory -Force | Out-Null }
+Start-Transcript -Path (Join-Path `$logDirectory ("ScheduledUpdate_{0}.log" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))) | Out-Null
+try {
+    Import-Module PSWindowsUpdate -ErrorAction Stop
+    `$rebootTime = [datetime]::Today.AddHours($restartHour).AddMinutes($restartMinute)
+    if (`$rebootTime -le (Get-Date)) { `$rebootTime = `$rebootTime.AddDays(1) }
+    $wuCommand
+} catch {
+    Write-Error `$_
+} finally {
+    Stop-Transcript | Out-Null
+}
+"@
         
-        # Zeitplan erstellen basierend auf dem gewählten Typ
-        $scheduleParam = ""
-        switch ($scheduleType) {
-            "Daily" {
-                $scheduleParam = "/sc DAILY"
+        # Skript speichern (UTF-8 mit BOM für Windows PowerShell 5.1)
+        [System.IO.File]::WriteAllText($scriptPath, $scriptContent, (New-Object System.Text.UTF8Encoding($true)))
+        
+        # Geplante Aufgabe über die Task Scheduler COM-API anlegen (kein Invoke-Expression, keine Quoting-Probleme)
+        Remove-EasyWUScheduledTask | Out-Null
+        $taskService = New-Object -ComObject Schedule.Service
+        $taskService.Connect()
+        $rootFolder = $taskService.GetFolder('\')
+        $taskDefinition = $taskService.NewTask(0)
+        $taskDefinition.RegistrationInfo.Description = "Windows Update-Zeitplan (easyWINUpdate v$($script:AppVersion))"
+        $taskDefinition.RegistrationInfo.Author = "easyWINUpdate - PhinIT"
+        $taskDefinition.Settings.Enabled = $true
+        $taskDefinition.Settings.StartWhenAvailable = $true
+        $taskDefinition.Settings.ExecutionTimeLimit = "PT4H"
+        $taskDefinition.Principal.RunLevel = 1 # Höchste Rechte
+        
+        switch ($scheduleIndex) {
+            1 {
+                # Wöchentlich: Bitmaske Sonntag=1, Montag=2 ... Samstag=64 (ComboBox beginnt mit Montag)
+                $trigger = $taskDefinition.Triggers.Create(3)
+                $trigger.WeeksInterval = 1
+                $trigger.DaysOfWeek = @(2, 4, 8, 16, 32, 64, 1)[$weekDayIndex]
             }
-            "Weekly" {
-                # Wochentag in Englisch konvertieren für schtasks
-                $dayOfWeek = switch ($weekDay) {
-                    "Monday" { "MON" }
-                    "Tuesday" { "TUE" }
-                    "Wednesday" { "WED" }
-                    "Thursday" { "THU" }
-                    "Friday" { "FRI" }
-                    "Saturday" { "SAT" }
-                    "Sunday" { "SUN" }
-                    default { "MON" }
-                }
-                $scheduleParam = "/sc WEEKLY /d $dayOfWeek"
-            }
-            "Monthly" {
-                $scheduleParam = "/sc MONTHLY /d $monthDay"
+            2 {
+                # Monatlich am gewählten Tag (alle Monate)
+                $trigger = $taskDefinition.Triggers.Create(4)
+                $trigger.DaysOfMonth = [int](1 -shl ($monthDay - 1))
+                $trigger.MonthsOfYear = 4095
             }
             default {
-                $scheduleParam = "/sc DAILY"
+                $trigger = $taskDefinition.Triggers.Create(2)
+                $trigger.DaysInterval = 1
             }
         }
+        $trigger.StartBoundary = [datetime]::Today.AddHours($hour).AddMinutes($minute).ToString("yyyy-MM-dd'T'HH:mm:ss")
+        $trigger.Enabled = $true
         
-        # Uhrzeit setzen
-        $timeParam = "/st $hour`:$minute`:00"
+        $execAction = $taskDefinition.Actions.Create(0)
+        $execAction.Path = (Get-Process -Id $PID).Path
+        $execAction.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$scriptPath`""
         
-        # Aufgabe erstellen
-        $command = "schtasks /create /tn $taskName /tr `"powershell.exe -ExecutionPolicy Bypass -File '$scriptPath'`" $scheduleParam $timeParam /ru SYSTEM /f"
-        Invoke-Expression $command
+        # 6 = TASK_CREATE_OR_UPDATE, 5 = TASK_LOGON_SERVICE_ACCOUNT
+        [void]$rootFolder.RegisterTaskDefinition($script:ScheduledTaskName, $taskDefinition, 6, "SYSTEM", $null, 5)
+        Write-AppLog -Message "Geplante Aufgabe '$($script:ScheduledTaskName)' angelegt: $scheduleType $('{0:D2}:{1:D2}' -f $hour, $minute), $updateBehavior, $restartBehavior"
         
         # Konfiguration in Registry speichern für die Anzeige
         $regPath = "HKCU:\SOFTWARE\easyWINUpdate"
@@ -3821,16 +4058,16 @@ function Set-WindowsUpdateSchedule {
         }
         
         # Konfiguration speichern
-        New-ItemProperty -Path $regPath -Name "ScheduleEnabled" -Value $true -PropertyType DWORD -Force | Out-Null
+        New-ItemProperty -Path $regPath -Name "ScheduleEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
         New-ItemProperty -Path $regPath -Name "ScheduleType" -Value $scheduleType -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $regPath -Name "WeekDay" -Value $weekDay -PropertyType String -Force | Out-Null
-        New-ItemProperty -Path $regPath -Name "MonthDay" -Value $monthDay -PropertyType String -Force | Out-Null
-        New-ItemProperty -Path $regPath -Name "Hour" -Value $hour -PropertyType String -Force | Out-Null
-        New-ItemProperty -Path $regPath -Name "Minute" -Value $minute -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $regPath -Name "MonthDay" -Value ([string]$monthDay) -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $regPath -Name "Hour" -Value ('{0:D2}' -f $hour) -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $regPath -Name "Minute" -Value ('{0:D2}' -f $minute) -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $regPath -Name "UpdateBehavior" -Value $updateBehavior -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $regPath -Name "RestartBehavior" -Value $restartBehavior -PropertyType String -Force | Out-Null
-        New-ItemProperty -Path $regPath -Name "RestartHour" -Value $restartHour -PropertyType String -Force | Out-Null
-        New-ItemProperty -Path $regPath -Name "RestartMinute" -Value $restartMinute -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $regPath -Name "RestartHour" -Value ('{0:D2}' -f $restartHour) -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $regPath -Name "RestartMinute" -Value ('{0:D2}' -f $restartMinute) -PropertyType String -Force | Out-Null
         
         Update-StatusText -Text "Windows Update schedule successfully configured" -Color "Green"
         
@@ -3848,63 +4085,50 @@ function Get-WindowsUpdateSchedule {
         $txtCurrentSchedule = $window.FindName("txtCurrentSchedule")
         $txtLastRunResult = $window.FindName("txtLastRunResult")
         
-        # Geplante Aufgabe abfragen
-        $taskName = "EasyWINUpdate_Scheduled_Task"
-        $taskExists = $false
-        
-        $taskInfoRaw = schtasks /query /tn $taskName /fo LIST 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $taskExists = $true
-            
-            # Einfache Informationen aus der Aufgabe extrahieren
-            $nextRunTime = ($taskInfoRaw | Where-Object { $_ -match "Next Run Time:" }).Trim().Replace("Next Run Time:", "").Trim()
-            $lastRunTime = ($taskInfoRaw | Where-Object { $_ -match "Last Run Time:" }).Trim().Replace("Last Run Time:", "").Trim()
-            $lastResult = ($taskInfoRaw | Where-Object { $_ -match "Last Result:" }).Trim().Replace("Last Result:", "").Trim()
+        # Geplante Aufgabe abfragen (COM-API statt sprachabhängiger schtasks-Ausgabe)
+        $task = Get-EasyWUScheduledTask
+        if ($task) {
+            $nextRunTime = if ($task.NextRunTime -and ([datetime]$task.NextRunTime) -gt [datetime]'2000-01-01') { ([datetime]$task.NextRunTime).ToString("dd.MM.yyyy HH:mm") } else { "Nicht geplant" }
+            $lastRunTime = if ($task.LastRunTime -and ([datetime]$task.LastRunTime) -gt [datetime]'2000-01-01') { ([datetime]$task.LastRunTime).ToString("dd.MM.yyyy HH:mm") } else { "Noch nicht ausgeführt" }
+            $lastResult = [int64]$task.LastTaskResult
             
             # Status aus Registry holen (detaillierte Konfiguration)
             $regPath = "HKCU:\SOFTWARE\easyWINUpdate"
             $scheduleInfo = ""
             
             if (Test-Path $regPath) {
-                $scheduleType = (Get-ItemProperty -Path $regPath -Name "ScheduleType" -ErrorAction SilentlyContinue).ScheduleType
-                $weekDay = (Get-ItemProperty -Path $regPath -Name "WeekDay" -ErrorAction SilentlyContinue).WeekDay
-                $monthDay = (Get-ItemProperty -Path $regPath -Name "MonthDay" -ErrorAction SilentlyContinue).MonthDay
-                $hour = (Get-ItemProperty -Path $regPath -Name "Hour" -ErrorAction SilentlyContinue).Hour
-                $minute = (Get-ItemProperty -Path $regPath -Name "Minute" -ErrorAction SilentlyContinue).Minute
-                $updateBehavior = (Get-ItemProperty -Path $regPath -Name "UpdateBehavior" -ErrorAction SilentlyContinue).UpdateBehavior
-                $restartBehavior = (Get-ItemProperty -Path $regPath -Name "RestartBehavior" -ErrorAction SilentlyContinue).RestartBehavior
+                $scheduleConfig = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+                $scheduleType = $scheduleConfig.ScheduleType
                 
                 # Format the schedule information
                 $scheduleInfo = "Schedule type: $scheduleType`r`n"
                 
                 if ($scheduleType -eq "Weekly") {
-                    $scheduleInfo += "Weekday: $weekDay`r`n"
+                    $scheduleInfo += "Weekday: $($scheduleConfig.WeekDay)`r`n"
                 } elseif ($scheduleType -eq "Monthly") {
-                    $scheduleInfo += "Day of month: $monthDay`r`n"
+                    $scheduleInfo += "Day of month: $($scheduleConfig.MonthDay)`r`n"
                 }
                 
-                $scheduleInfo += "Time: $hour`:$minute`r`n"
-                $scheduleInfo += "Behavior: $updateBehavior`r`n"
-                $scheduleInfo += "After installation: $restartBehavior`r`n"
+                $scheduleInfo += "Time: $($scheduleConfig.Hour):$($scheduleConfig.Minute)`r`n"
+                $scheduleInfo += "Behavior: $($scheduleConfig.UpdateBehavior)`r`n"
+                $scheduleInfo += "After installation: $($scheduleConfig.RestartBehavior)`r`n"
                 
-                if ($restartBehavior -eq "Plan restart for:") {
-                    $restartHour = (Get-ItemProperty -Path $regPath -Name "RestartHour" -ErrorAction SilentlyContinue).RestartHour
-                    $restartMinute = (Get-ItemProperty -Path $regPath -Name "RestartMinute" -ErrorAction SilentlyContinue).RestartMinute
-                    $scheduleInfo += "Scheduled restart: $restartHour`:$restartMinute`r`n"
+                if ($scheduleConfig.RestartBehavior -like "Schedule restart*") {
+                    $scheduleInfo += "Scheduled restart: $($scheduleConfig.RestartHour):$($scheduleConfig.RestartMinute)`r`n"
                 }
             }
             
             # Status anzeigen
-            $statusText = "Windows Update schedule is active`r`n`r`n"
-            $statusText += $scheduleInfo
-            $statusText += "`r`nNext execution: $nextRunTime`r`n"
-            $statusText += "Last execution: $lastRunTime"
+            $scheduleText = "Windows Update schedule is active`r`n`r`n"
+            $scheduleText += $scheduleInfo
+            $scheduleText += "`r`nNext execution: $nextRunTime`r`n"
+            $scheduleText += "Last execution: $lastRunTime"
             
-            $txtCurrentSchedule.Text = $statusText
+            $txtCurrentSchedule.Text = $scheduleText
             
-            # Letztes Ergebnis anzeigen, wenn vorhanden
-            if ($lastResult -ne "0") {
-                $txtLastRunResult.Text = "Last result: $lastResult (Error code)"
+            # Letztes Ergebnis anzeigen (0 = Erfolg, 0x41303 = noch nicht ausgeführt)
+            if ($lastResult -ne 0 -and $lastResult -ne 0x41303) {
+                $txtLastRunResult.Text = "Last result: 0x{0:X8} (Error code)" -f $lastResult
                 $txtLastRunResult.Visibility = "Visible"
             } else {
                 $txtLastRunResult.Visibility = "Collapsed"
@@ -3961,10 +4185,7 @@ function Disable-WindowsAutoUpdate {
         Set-ItemProperty -Path $auPath -Name "NoAutoUpdate" -Value 1 -Type DWord -Force
         
         # Geplante Aufgabe löschen
-        $taskName = "EasyWINUpdate_Scheduled_Task"
-        schtasks /query /tn $taskName 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            schtasks /delete /tn $taskName /f
+        if (Remove-EasyWUScheduledTask) {
             Update-StatusText -Text "Scheduled update task removed" -Color "Blue"
         }
         
@@ -4096,44 +4317,29 @@ $btnCheckForUpdates = $window.FindName("btnCheckForUpdates")
 if ($btnCheckForUpdates) {
     $btnCheckForUpdates.Add_Click({
         Update-StatusText -Text "Checking for updates..." -Color "Blue"
-        wuauclt.exe /detectnow
-        Start-Sleep -Seconds 2
+        try {
+            Start-UpdateDetection
+            Update-StatusText -Text "Update detection started. Results appear after the scan has finished." -Color "Green"
+        } catch {
+            Update-StatusText -Text "Error starting update detection: $_" -Color "Red"
+        }
         Load-UpdateStatusPage
     })
 }
 
-$btnRestartService = $window.FindName("btnRestartService")
-if ($btnRestartService) {
-    $btnRestartService.Add_Click({
-        Update-StatusText -Text "Windows Update service is being restarted..." -Color "Blue"
-        Restart-Service -Name wuauserv -Force
-        Start-Sleep -Seconds 2
-        Load-UpdateStatusPage
-    })
-}
-
-$btnRestartBITS = $window.FindName("btnRestartBITS")
-if ($btnRestartBITS) {
-    $btnRestartBITS.Add_Click({
-        Update-StatusText -Text "BITS service is being restarted..." -Color "Blue"
-        Restart-Service -Name bits -Force
-        Start-Sleep -Seconds 2
-        Load-UpdateStatusPage
-    })
-}
-
-# Event-Handler für installede Updates-Seite
+# Event-Handler für installierte Updates-Seite
 $btnSearchInstalled = $window.FindName("btnSearchInstalled")
 $btnSearchInstalled.Add_Click({
     $txtSearchInstalled = $window.FindName("txtSearchInstalled")
-    $searchText = $txtSearchInstalled.Text.ToLower()
+    $searchText = ([string]$txtSearchInstalled.Text).Trim()
     
     if (-not [string]::IsNullOrEmpty($searchText)) {
-        $hotfixes = Get-InstalledWindowsUpdates
-        $filteredHotfixes = $hotfixes | Where-Object { 
-            $_.HotFixID.ToLower().Contains($searchText) -or 
-            $_.Description.ToLower().Contains($searchText) 
-        }
+        # Bereits geladene Liste filtern (kein erneuter Get-HotFix-Aufruf), Platzhalter im Suchtext maskieren
+        $hotfixes = if ($script:InstalledUpdatesCache) { $script:InstalledUpdatesCache } else { Get-InstalledWindowsUpdates }
+        $pattern = "*$([System.Management.Automation.WildcardPattern]::Escape($searchText))*"
+        $filteredHotfixes = @($hotfixes | Where-Object {
+            "$($_.HotFixID)" -like $pattern -or "$($_.Description)" -like $pattern
+        })
         
         $dgInstalledUpdates = $window.FindName("dgInstalledUpdates")
         $dgInstalledUpdates.ItemsSource = $filteredHotfixes
@@ -4151,12 +4357,21 @@ $btnRefreshInstalled.Add_Click({
 
 $btnExportInstalled = $window.FindName("btnExportInstalled")
 $btnExportInstalled.Add_Click({
-    $savePath = "$env:USERPROFILE\Desktop\installede_Updates_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+    # Desktop-Pfad über die Shell ermitteln (funktioniert auch bei umgeleitetem/OneDrive-Desktop)
+    $desktopPath = [Environment]::GetFolderPath('Desktop')
+    if ([string]::IsNullOrEmpty($desktopPath) -or -not (Test-Path -LiteralPath $desktopPath)) {
+        $desktopPath = $script:LogDirectory
+    }
+    $savePath = Join-Path $desktopPath "Installierte_Updates_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
     $hotfixes = Get-InstalledWindowsUpdates
     
     if ($hotfixes) {
-        $hotfixes | Export-Csv -Path $savePath -NoTypeInformation -Delimiter ";"
-        Update-StatusText -Text "Updates have been exported to '$savePath'." -Color "Green"
+        try {
+            $hotfixes | Export-Csv -Path $savePath -NoTypeInformation -Delimiter ";" -Encoding UTF8 -ErrorAction Stop
+            Update-StatusText -Text "Updates have been exported to '$savePath'." -Color "Green"
+        } catch {
+            Update-StatusText -Text "Error exporting updates: $_" -Color "Red"
+        }
     } else {
         Update-StatusText -Text "No updates to export." -Color "Red"
     }
@@ -4171,75 +4386,46 @@ $btnSearchAvailable.Add_Click({
 $btnInstallAll = $window.FindName("btnInstallAll")
 $btnInstallAll.Add_Click({
     $dgAvailableUpdates = $window.FindName("dgAvailableUpdates")
-    $updates = $dgAvailableUpdates.ItemsSource
+    $updates = @($dgAvailableUpdates.ItemsSource | Where-Object { $_ -and $_.Identity })
     
-    if ($updates -and $updates.Count -gt 0) {
+    if ($updates.Count -gt 0) {
         $result = [System.Windows.MessageBox]::Show(
-            "Do you want to install all $($updates.Count) updates? The computer may be restarted.",
+            "Do you want to install all $($updates.Count) updates? A restart may be required afterwards.",
             "Install updates",
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Question
         )
         
         if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
-            Update-StatusText -Text "Installing all updates..." -Color "Blue"
-            
-            try {
-                $progressUpdates = $window.FindName("progressUpdates")
-                $progressUpdates.Visibility = "Visible"
-                
-                # Alle verfügbaren Updates installieren
-                Get-WindowsUpdate -WindowsUpdate -Install -AcceptAll -IgnoreReboot | Out-Null
-                
-                $progressUpdates.Visibility = "Collapsed"
-                Update-StatusText -Text "All updates have been installed." -Color "Green"
-                
-                # Nach der Installation neu laden
-                Load-AvailableUpdatesPage
-            } catch {
-                Update-StatusText -Text "Error installing updates: $_" -Color "Red"
-                $progressUpdates.Visibility = "Collapsed"
-            }
+            # Nur die angezeigten (gefilterten) Updates installieren, Quelle wie konfiguriert (Windows Update oder WSUS)
+            Start-UpdateInstallation -UpdateIds @($updates | ForEach-Object { [string]$_.Identity }) -Description "$($updates.Count) Updates"
         }
     } else {
         Update-StatusText -Text "No updates available for installation." -Color "Red"
     }
 })
 
+# Liefert die in der Liste angehakten Updates (offene Bearbeitung der CheckBox-Spalte vorher übernehmen)
+function Get-SelectedAvailableUpdates {
+    $dgAvailableUpdates = $window.FindName("dgAvailableUpdates")
+    [void]$dgAvailableUpdates.CommitEdit([System.Windows.Controls.DataGridEditingUnit]::Row, $true)
+    return @($dgAvailableUpdates.ItemsSource | Where-Object { $_ -and $_.IsSelected -and $_.Identity })
+}
+
 $btnInstallSelected = $window.FindName("btnInstallSelected")
 $btnInstallSelected.Add_Click({
-    $dgAvailableUpdates = $window.FindName("dgAvailableUpdates")
-    $updates = $dgAvailableUpdates.ItemsSource | Where-Object { $_.IsSelected }
+    $updates = Get-SelectedAvailableUpdates
     
-    if ($updates -and $updates.Count -gt 0) {
+    if ($updates.Count -gt 0) {
         $result = [System.Windows.MessageBox]::Show(
-            "Do you want to install the selected $($updates.Count) updates? The computer may be restarted.",
+            "Do you want to install the selected $($updates.Count) updates? A restart may be required afterwards.",
             "Install updates",
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Question
         )
         
         if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
-            Update-StatusText -Text "Installiere ausgewählte Updates..." -Color "Blue"
-            
-            try {
-                $progressUpdates = $window.FindName("progressUpdates")
-                $progressUpdates.Visibility = "Visible"
-                
-                # Ausgewählte Updates installieren
-                foreach ($update in $updates) {
-                    Get-WindowsUpdate -WindowsUpdate -KBArticleID $update.KBArticleID.Replace("KB", "") -Install -AcceptAll -IgnoreReboot | Out-Null
-                }
-                
-                $progressUpdates.Visibility = "Collapsed"
-                Update-StatusText -Text "Selected updates have been installed." -Color "Green"
-                
-                # Nach der Installation neu laden
-                Load-AvailableUpdatesPage
-            } catch {
-                Update-StatusText -Text "Error installing updates: $_" -Color "Red"
-                $progressUpdates.Visibility = "Collapsed"
-            }
+            Start-UpdateInstallation -UpdateIds @($updates | ForEach-Object { [string]$_.Identity }) -Description "$($updates.Count) ausgewählte Updates"
         }
     } else {
         Update-StatusText -Text "No updates selected." -Color "Red"
@@ -4248,27 +4434,10 @@ $btnInstallSelected.Add_Click({
 
 $btnDownloadSelected = $window.FindName("btnDownloadSelected")
 $btnDownloadSelected.Add_Click({
-    $dgAvailableUpdates = $window.FindName("dgAvailableUpdates")
-    $updates = $dgAvailableUpdates.ItemsSource | Where-Object { $_.IsSelected }
+    $updates = Get-SelectedAvailableUpdates
     
-    if ($updates -and $updates.Count -gt 0) {
-        Update-StatusText -Text "Downloading selected updates..." -Color "Blue"
-        
-        try {
-            $progressUpdates = $window.FindName("progressUpdates")
-            $progressUpdates.Visibility = "Visible"
-            
-            # Ausgewählte Updates herunterladen
-            foreach ($update in $updates) {
-                Get-WindowsUpdate -WindowsUpdate -KBArticleID $update.KBArticleID.Replace("KB", "") -Download -AcceptAll | Out-Null
-            }
-            
-            $progressUpdates.Visibility = "Collapsed"
-            Update-StatusText -Text "Selected updates have been downloaded." -Color "Green"
-        } catch {
-            Update-StatusText -Text "Error downloading updates: $_" -Color "Red"
-            $progressUpdates.Visibility = "Collapsed"
-        }
+    if ($updates.Count -gt 0) {
+        Start-UpdateInstallation -UpdateIds @($updates | ForEach-Object { [string]$_.Identity }) -DownloadOnly -Description "$($updates.Count) ausgewählte Updates"
     } else {
         Update-StatusText -Text "No updates selected." -Color "Red"
     }
@@ -4317,44 +4486,203 @@ $btnDetectNow = $window.FindName("btnDetectNow")
 $btnDetectNow.Add_Click({
     Update-StatusText -Text "Starting update detection..." -Color "Blue"
     
-    # Update-Erkennung erzwingen
-    wuauclt.exe /detectnow
-    
-    Update-StatusText -Text "Update detection started." -Color "Green"
+    try {
+        # Update-Erkennung erzwingen
+        Start-UpdateDetection
+        Update-StatusText -Text "Update detection started." -Color "Green"
+    } catch {
+        Update-StatusText -Text "Error starting update detection: $_" -Color "Red"
+    }
 })
 
-# Event-Handler für die Entfernen-Buttons in den DataGrids
-# Da diese dynamisch generiert werden, müssen wir die Click-Events für die gesamte DataGrid abfangen
-$dgInstalledUpdates = $window.FindName("dgInstalledUpdates")
-$dgInstalledUpdates.Add_LoadingRow({
-    param($sender, $e)
-    
-    $row = $e.Row
-    $btnRemoveUpdate = $row.FindName("btnRemoveUpdate")
-    
-    if ($btnRemoveUpdate) {
-        $btnRemoveUpdate.Add_Click({
-            $kbNumber = $btnRemoveUpdate.Tag
-            
-            $result = [System.Windows.MessageBox]::Show(
-                "Möchten Sie das Update $kbNumber wirklich entfernen?",
-                "Update entfernen",
-                [System.Windows.MessageBoxButton]::YesNo,
-                [System.Windows.MessageBoxImage]::Warning
-            )
-            
-            if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
-                Update-StatusText -Text "Removing Update $kbNumber..." -Color "Blue"
-                
-                if (Remove-WindowsUpdateKB -KBNumber $kbNumber) {
-                    Update-StatusText -Text "Update $kbNumber has been removed. The computer may need to be restarted." -Color "Green"
-                    # Update the list
-                    Load-InstalledUpdatesPage
-                } else {
-                    Update-StatusText -Text "Error removing Update $kbNumber." -Color "Red"
-                }
+# Gruppenrichtlinien-Einstellungen
+$btnRefreshGPOSettings = $window.FindName("btnRefreshGPOSettings")
+if ($btnRefreshGPOSettings) {
+    $btnRefreshGPOSettings.Add_Click({
+        Load-WSUSSettingsPage
+        Update-StatusText -Text "Settings reloaded." -Color "Green"
+    })
+}
+
+$btnApplyGPOSettings = $window.FindName("btnApplyGPOSettings")
+if ($btnApplyGPOSettings) {
+    $btnApplyGPOSettings.Add_Click({
+        $cmbAutoUpdateSetting = $window.FindName("cmbAutoUpdateSetting")
+        $cmbUpdateConfigType = $window.FindName("cmbUpdateConfigType")
+        $cmbInstallTime = $window.FindName("cmbInstallTime")
+        $chkShowNotifications = $window.FindName("chkShowNotifications")
+        $cmbRebootBehavior = $window.FindName("cmbRebootBehavior")
+        
+        if ($cmbAutoUpdateSetting.SelectedIndex -lt 0 -or $cmbUpdateConfigType.SelectedIndex -lt 0 -or
+            $cmbInstallTime.SelectedIndex -lt 0 -or $cmbRebootBehavior.SelectedIndex -lt 0) {
+            Update-StatusText -Text "Please select all settings first." -Color "Yellow"
+            return
+        }
+        
+        $installHour = 3
+        if ([string]$cmbInstallTime.SelectedItem.Content -match '^(\d{1,2}):') {
+            $installHour = [int]$Matches[1]
+        }
+        
+        $result = [System.Windows.MessageBox]::Show(
+            "Do you want to write these Windows Update policy settings to the local registry? The Windows Update service will be restarted.",
+            "Apply settings",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question
+        )
+        if ($result -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        
+        # AUOptions: 2 = nur benachrichtigen, 3 = herunterladen und benachrichtigen, 4 = automatisch installieren
+        $applied = Set-WindowsUpdateGPOSettings -AutoUpdateEnabled ($cmbAutoUpdateSetting.SelectedIndex -eq 0) `
+            -ConfigType ($cmbUpdateConfigType.SelectedIndex + 2) `
+            -InstallTime $installHour `
+            -ShowNotifications ([bool]$chkShowNotifications.IsChecked) `
+            -RebootBehavior $cmbRebootBehavior.SelectedIndex
+        
+        if ($applied) {
+            Update-StatusText -Text "Windows Update policy settings applied." -Color "Green"
+            Load-WSUSSettingsPage
+        } else {
+            Update-StatusText -Text "Error applying Windows Update policy settings." -Color "Red"
+        }
+    })
+}
+
+# WSUS-Zielgruppen (clientseitige Zielgruppenadressierung)
+$btnRefreshTargetGroups = $window.FindName("btnRefreshTargetGroups")
+if ($btnRefreshTargetGroups) {
+    $btnRefreshTargetGroups.Add_Click({
+        $dgWSUSTargetGroups = $window.FindName("dgWSUSTargetGroups")
+        $dgWSUSTargetGroups.ItemsSource = @(Get-WSUSTargetGroups)
+        Load-WSUSSettingsPage
+        Update-StatusText -Text "Target groups refreshed." -Color "Green"
+    })
+}
+
+$btnSetTargetGroup = $window.FindName("btnSetTargetGroup")
+if ($btnSetTargetGroup) {
+    $btnSetTargetGroup.Add_Click({
+        $dgWSUSTargetGroups = $window.FindName("dgWSUSTargetGroups")
+        $selectedGroup = $dgWSUSTargetGroups.SelectedItem
+        if ($null -eq $selectedGroup -or [string]::IsNullOrWhiteSpace([string]$selectedGroup.Name)) {
+            Update-StatusText -Text "Please select a target group first." -Color "Yellow"
+            return
+        }
+        
+        $wuRegPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+        $wuServer = (Get-ItemProperty -Path $wuRegPath -Name "WUServer" -ErrorAction SilentlyContinue).WUServer
+        if ([string]::IsNullOrEmpty($wuServer)) {
+            Update-StatusText -Text "No WSUS server configured. Target groups are only used with WSUS." -Color "Yellow"
+            return
+        }
+        
+        $groupName = [string]$selectedGroup.Name
+        try {
+            if ($groupName -eq "Unassigned Computers") {
+                # Keine Zielgruppe: clientseitige Zuordnung entfernen
+                Remove-ItemProperty -Path $wuRegPath -Name "TargetGroup" -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $wuRegPath -Name "TargetGroupEnabled" -Value 0 -Type DWord
+            } else {
+                Set-ItemProperty -Path $wuRegPath -Name "TargetGroup" -Value $groupName -Type String
+                Set-ItemProperty -Path $wuRegPath -Name "TargetGroupEnabled" -Value 1 -Type DWord
             }
-        })
+            Write-AppLog -Message "WSUS-Zielgruppe gesetzt: $groupName"
+            Start-UpdateDetection
+            Update-StatusText -Text "Target group '$groupName' set. The assignment takes effect with the next WSUS report." -Color "Green"
+            Load-WSUSSettingsPage
+        } catch {
+            Update-StatusText -Text "Error setting target group: $_" -Color "Red"
+        }
+    })
+}
+
+# WSUS-Synchronisierung
+$btnSaveWSUSSyncSettings = $window.FindName("btnSaveWSUSSyncSettings")
+if ($btnSaveWSUSSyncSettings) {
+    $btnSaveWSUSSyncSettings.Add_Click({
+        $cmbSyncInterval = $window.FindName("cmbSyncInterval")
+        $chkAutoSync = $window.FindName("chkAutoSync")
+        if ($null -eq $cmbSyncInterval.SelectedItem) {
+            Update-StatusText -Text "Please select a synchronization interval." -Color "Yellow"
+            return
+        }
+        $syncInterval = [string]$cmbSyncInterval.SelectedItem.Content
+        
+        if (Set-WSUSSyncSettings -SyncInterval $syncInterval -AutoSync ([bool]$chkAutoSync.IsChecked)) {
+            # Hinweis: Die Richtlinie DetectionFrequency erlaubt maximal 22 Stunden
+            Update-StatusText -Text "Synchronization settings saved ($syncInterval; detection interval max. 22 hours by policy)." -Color "Green"
+            Load-WSUSSettingsPage
+        } else {
+            Update-StatusText -Text "Error saving synchronization settings." -Color "Red"
+        }
+    })
+}
+
+$btnStartWSUSSync = $window.FindName("btnStartWSUSSync")
+if ($btnStartWSUSSync) {
+    $btnStartWSUSSync.Add_Click({
+        Start-WSUSSynchronization | Out-Null
+    })
+}
+
+# Event-Handler für die Schaltflächen in den DataGrid-Zeilen
+# Die Buttons stammen aus einem DataTemplate (eigener Namensbereich) und sind per FindName nicht erreichbar.
+# Daher wird das geroutete Click-Ereignis zentral am DataGrid abgefangen.
+$dgInstalledUpdates = $window.FindName("dgInstalledUpdates")
+$dgInstalledUpdates.AddHandler([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent, [System.Windows.RoutedEventHandler]{
+    $routedArgs = $args[1]
+    
+    $clickedButton = $routedArgs.OriginalSource
+    if (-not ($clickedButton -is [System.Windows.Controls.Button]) -or $clickedButton.Name -ne "btnRemoveUpdate") { return }
+    $kbNumber = [string]$clickedButton.Tag
+    
+    $result = [System.Windows.MessageBox]::Show(
+        "Möchten Sie das Update $kbNumber wirklich entfernen?",
+        "Update entfernen",
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    
+    if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
+        Update-StatusText -Text "Removing Update $kbNumber..." -Color "Blue"
+        $script:UpdateBeingRemoved = $kbNumber
+        
+        # wusa.exe kann mehrere Minuten benötigen -> im Hintergrund ausführen
+        Start-FunctionInBackground -FunctionName 'Remove-WindowsUpdateKB' -FunctionParameters @{ KBNumber = $kbNumber } -OnCompleted {
+            param($Output, $ErrorText)
+            $removedKB = $script:UpdateBeingRemoved
+            if ([bool]($Output | Select-Object -Last 1)) {
+                Update-StatusText -Text "Update $removedKB has been removed. The computer may need to be restarted." -Color "Green"
+                Load-InstalledUpdatesPage
+            } else {
+                Update-StatusText -Text "Error removing Update $removedKB. $ErrorText" -Color "Red"
+            }
+        }
+    }
+})
+
+$dgAvailableUpdates = $window.FindName("dgAvailableUpdates")
+$dgAvailableUpdates.AddHandler([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent, [System.Windows.RoutedEventHandler]{
+    $routedArgs = $args[1]
+    
+    $clickedButton = $routedArgs.OriginalSource
+    if (-not ($clickedButton -is [System.Windows.Controls.Button]) -or $clickedButton.Name -ne "btnInstallUpdate") { return }
+    $identity = [string]$clickedButton.Tag
+    if ([string]::IsNullOrEmpty($identity)) { return }
+    
+    $dgAvailableUpdates = $window.FindName("dgAvailableUpdates")
+    $updateEntry = @($dgAvailableUpdates.ItemsSource | Where-Object { [string]$_.Identity -eq $identity }) | Select-Object -First 1
+    $kbNumber = if ($updateEntry) { $updateEntry.KBArticleID } else { $identity }
+    
+    $result = [System.Windows.MessageBox]::Show(
+        "Do you want to install Update $kbNumber?",
+        "Install Update",
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Question
+    )
+    
+    if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
+        Start-UpdateInstallation -UpdateIds @($identity) -Description "Update $kbNumber"
     }
 })
 
@@ -4363,10 +4691,13 @@ $btnCreateRestorePoint = $window.FindName("btnCreateRestorePoint")
 $btnCreateRestorePoint.Add_Click({
     Update-StatusText -Text "Creating System Restore Point..." -Color "Blue"
     
-    if (New-SystemRestorePoint) {
-        Update-StatusText -Text "System Restore Point has been successfully created." -Color "Green"
-    } else {
-        Update-StatusText -Text "Error creating System Restore Point." -Color "Red"
+    Start-FunctionInBackground -FunctionName 'New-SystemRestorePoint' -OnCompleted {
+        param($Output, $ErrorText)
+        if ([bool]($Output | Select-Object -Last 1)) {
+            Update-StatusText -Text "System Restore Point has been successfully created." -Color "Green"
+        } else {
+            Update-StatusText -Text "Error creating System Restore Point. $ErrorText" -Color "Red"
+        }
     }
 })
 
@@ -4436,7 +4767,16 @@ $btnClearStuckUpdates.Add_Click({
     )
     
     if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
-        Clear-StuckUpdatesAndBITSJobs
+        Update-StatusText -Text "Entferne hängende Updates und BITS-Jobs..." -Color "Blue"
+        # Get-WindowsPackage kann lange dauern -> im Hintergrund ausführen
+        Start-FunctionInBackground -FunctionName 'Clear-StuckUpdatesAndBITSJobs' -HelperFunctions 'Start-UpdateDetection' -OnCompleted {
+            param($Output, $ErrorText)
+            if ([bool]($Output | Select-Object -Last 1)) {
+                Update-StatusText -Text "Hängende Updates und BITS-Jobs wurden entfernt." -Color "Green"
+            } else {
+                Update-StatusText -Text "Fehler beim Entfernen von hängenden Updates. $ErrorText" -Color "Red"
+            }
+        }
     }
 })
 # Event-Handler für die neuen Troubleshooting-Funktionen
@@ -4474,11 +4814,19 @@ $btnWaaSMedic.Add_Click({
     }
 })
 
-# Windows Update-Log-Analyse
+# Windows Update-Log-Analyse (Get-WindowsUpdateLog dauert lange -> Hintergrund)
 $btnAnalyzeLogs = $window.FindName("btnAnalyzeLogs")
 $btnAnalyzeLogs.Add_Click({
-    $result = Analyze-WindowsUpdateLogs
-    [System.Windows.MessageBox]::Show($result, "Windows Update-Log-Analyse", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information)
+    Update-StatusText -Text "Analysiere Windows Update-Logs (kann einige Minuten dauern)..." -Color "Blue"
+    Start-FunctionInBackground -FunctionName 'Analyze-WindowsUpdateLogs' -FunctionParameters @{ OutputDirectory = $script:LogDirectory } -OnCompleted {
+        param($Output, $ErrorText)
+        $analysisText = [string]($Output | Where-Object { $_ -is [string] } | Select-Object -Last 1)
+        if ([string]::IsNullOrEmpty($analysisText)) {
+            $analysisText = "Die Log-Analyse lieferte kein Ergebnis. $ErrorText"
+        }
+        Update-StatusText -Text "Log-Analyse abgeschlossen." -Color "Green"
+        [System.Windows.MessageBox]::Show($analysisText, "Windows Update-Log-Analyse", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+    }
 })
 
 # Registry-Reparatur
@@ -4558,48 +4906,69 @@ $btnAutoFix.Add_Click({
     }
 })
 
-$dgAvailableUpdates = $window.FindName("dgAvailableUpdates")
-$dgAvailableUpdates.Add_LoadingRow({
-    param($sender, $e)
-    
-    $row = $e.Row
-    $btnInstallUpdate = $row.FindName("btnInstallUpdate")
-    
-    if ($btnInstallUpdate) {
-        $btnInstallUpdate.Add_Click({
-            $identity = $btnInstallUpdate.Tag
-            $kbNumber = ($dgAvailableUpdates.ItemsSource | Where-Object { $_.Identity -eq $identity }).KBArticleID
-            
-            $result = [System.Windows.MessageBox]::Show(
-                "Do you want to install Update $kbNumber?",
-                "Install Update",
-                [System.Windows.MessageBoxButton]::YesNo,
-                [System.Windows.MessageBoxImage]::Question
-            )
-            
-            if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
-                Update-StatusText -Text "Installing Update $kbNumber..." -Color "Blue"
-                
+# Weitere Werkzeuge
+$btnCleanTemp = $window.FindName("btnCleanTemp")
+if ($btnCleanTemp) {
+    $btnCleanTemp.Add_Click({
+        $result = [System.Windows.MessageBox]::Show(
+            "Do you want to delete the temporary files of the current user and of Windows ($env:SystemRoot\Temp)? Files in use are skipped.",
+            "Clean temporary files",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question
+        )
+        if ($result -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        
+        Update-StatusText -Text "Cleaning temporary files..." -Color "Blue"
+        $tempFolders = @($env:TEMP, (Join-Path $env:SystemRoot 'Temp')) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+        $removedCount = 0
+        foreach ($tempFolder in $tempFolders) {
+            foreach ($item in @(Get-ChildItem -LiteralPath $tempFolder -Force -ErrorAction SilentlyContinue)) {
                 try {
-                    $progressUpdates = $window.FindName("progressUpdates")
-                    $progressUpdates.Visibility = "Visible"
-                    
-                    # Update installieren
-                    Get-WindowsUpdate -WindowsUpdate -KBArticleID $kbNumber.Replace("KB", "") -Install -AcceptAll -IgnoreReboot | Out-Null
-                    
-                    $progressUpdates.Visibility = "Collapsed"
-                    Update-StatusText -Text "Update $kbNumber has been installed." -Color "Green"
-                    
-                    # Nach der Installation neu laden
-                    Load-AvailableUpdatesPage
+                    Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+                    $removedCount++
                 } catch {
-                    Update-StatusText -Text "Error installing update: $_" -Color "Red"
-                    $progressUpdates.Visibility = "Collapsed"
+                    Write-Verbose "Übersprungen (in Verwendung): $($item.FullName)"
                 }
             }
-        })
-    }
-})
+        }
+        Write-AppLog -Message "Temporäre Dateien bereinigt: $removedCount Einträge entfernt"
+        Update-StatusText -Text "$removedCount temporary items removed (items in use were skipped)." -Color "Green"
+    })
+}
+
+$btnResetWinsock = $window.FindName("btnResetWinsock")
+if ($btnResetWinsock) {
+    $btnResetWinsock.Add_Click({
+        $result = [System.Windows.MessageBox]::Show(
+            "Do you want to reset the Winsock catalog? A restart is required afterwards.",
+            "Reset Winsock",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        if ($result -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        
+        $netshOutput = & (Join-Path $env:SystemRoot 'System32\netsh.exe') winsock reset 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-AppLog -Message "Winsock zurückgesetzt"
+            Update-StatusText -Text "Winsock catalog reset. Please restart the computer." -Color "Green"
+        } else {
+            Update-StatusText -Text "Error resetting Winsock: $($netshOutput -join ' ')" -Color "Red"
+        }
+    })
+}
+
+$btnCheckDisk = $window.FindName("btnCheckDisk")
+if ($btnCheckDisk) {
+    $btnCheckDisk.Add_Click({
+        try {
+            # Online-Prüfung (nur lesend) des Systemlaufwerks in eigenem Konsolenfenster
+            Start-ConsoleTool -CommandLine "chkdsk.exe $env:SystemDrive /scan" -Title "easyWINUpdate - CHKDSK"
+            Update-StatusText -Text "CHKDSK has been started in a separate window." -Color "Green"
+        } catch {
+            Update-StatusText -Text "Error starting CHKDSK: $_" -Color "Red"
+        }
+    })
+}
 
 $window.Add_Loaded({
     # Initial Page anzeigen
@@ -4624,19 +4993,29 @@ $computerName.Text = $env:COMPUTERNAME
 
 # Versionsnummer anzeigen
 $versionText = $window.FindName("versionText")
-$versionText.Text = "easyWINUpdate v0.2.1"
+$versionText.Text = "easyWINUpdate v$($script:AppVersion) - PhinIT"
 
 # Initialisierung
 try {
-    # Event-Handler für Schließen des Fensters
+    # Event-Handler für Schließen des Fensters: laufende Hintergrundaufgaben beenden
     $window.Add_Closing({
-        # Aufräumarbeiten hier
+        if ($script:BackgroundTimer) {
+            $script:BackgroundTimer.Stop()
+        }
+        foreach ($task in @($script:BackgroundTasks)) {
+            try {
+                $task.PowerShell.Stop()
+                $task.PowerShell.Runspace.Dispose()
+                $task.PowerShell.Dispose()
+            } catch {
+                Write-Verbose "Hintergrundaufgabe konnte nicht beendet werden: $_"
+            }
+        }
+        $script:BackgroundTasks.Clear()
+        Write-AppLog -Message "easyWINUpdate beendet"
     })
     
-    # Erstmalige Anzeige der Update-Status-Seite
-    Load-UpdateStatusPage
-    
-    # GUI anzeigen
+    # GUI anzeigen (die Startseite wird im Loaded-Ereignis geladen)
     $window.ShowDialog() | Out-Null
 } catch {
     Write-Error "Error executing the script: $_"
