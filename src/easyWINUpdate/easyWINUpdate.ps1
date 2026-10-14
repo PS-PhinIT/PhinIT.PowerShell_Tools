@@ -3844,7 +3844,8 @@ function Initialize-UpdateScheduleControls {
 # Name der geplanten Aufgabe (einheitlich für Anlegen, Anzeigen und Löschen)
 $script:ScheduledTaskName = "easyWINUpdate_Task"
 $script:LegacyScheduledTaskNames = @("EasyWINUpdate_Scheduled_Task")
-$script:ScheduledTaskDirectory = Join-Path $env:ProgramData 'easyWINUpdate'
+# Unter %ProgramFiles% koennen Standardbenutzer keine Ordner anlegen (anders als unter %ProgramData%)
+$script:ScheduledTaskDirectory = Join-Path $env:ProgramFiles 'PhinIT\easyWINUpdate'
 
 # Liefert die geplante Aufgabe (Task Scheduler COM-API, sprachunabhängig) oder $null
 function Get-EasyWUScheduledTask {
@@ -3885,13 +3886,27 @@ function Initialize-ProtectedTaskDirectory {
         [Parameter(Mandatory = $true)]
         [string]$Path
     )
+    $trustedSids = @('S-1-5-18', 'S-1-5-32-544')
+    if (Test-Path -LiteralPath $Path) {
+        # Vorhandenen Ordner nur weiterverwenden, wenn er SYSTEM oder den Administratoren gehört
+        $ownerSid = $null
+        try {
+            $ownerSid = (Get-Acl -LiteralPath $Path).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+        } catch {
+            $ownerSid = $null
+        }
+        if ($trustedSids -notcontains $ownerSid) {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        }
+    }
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -Path $Path -ItemType Directory -Force | Out-Null
     }
     $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetOwner((New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')))
     $acl.SetAccessRuleProtection($true, $false)
     $inheritance = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+    foreach ($sid in $trustedSids) {
         $identity = New-Object System.Security.Principal.SecurityIdentifier($sid)
         $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', $inheritance, [System.Security.AccessControl.PropagationFlags]::None, 'Allow')
         $acl.AddAccessRule($rule)
@@ -4007,6 +4022,10 @@ try {
 "@
         
         # Skript speichern (UTF-8 mit BOM für Windows PowerShell 5.1)
+        # Vorhandene Datei löschen, damit sie neu angelegt wird und die geschützten Rechte des Ordners erbt
+        if (Test-Path -LiteralPath $scriptPath) {
+            Remove-Item -LiteralPath $scriptPath -Force -ErrorAction Stop
+        }
         [System.IO.File]::WriteAllText($scriptPath, $scriptContent, (New-Object System.Text.UTF8Encoding($true)))
         
         # Geplante Aufgabe über die Task Scheduler COM-API anlegen (kein Invoke-Expression, keine Quoting-Probleme)

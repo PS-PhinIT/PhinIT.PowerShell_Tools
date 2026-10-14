@@ -32,7 +32,7 @@ Status: ✅ behoben · ⚠️ dokumentiertes Restrisiko / offen
 
 | # | Kategorie | Befund | Status |
 |---|-----------|--------|--------|
-| W1 | Sicherheit | Geplante Aufgabe als SYSTEM startete ein Skript aus `%TEMP%` (benutzerschreibbar → Rechteausweitung) | ✅ `%ProgramData%\easyWINUpdate`, ACL nur SYSTEM/Administratoren |
+| W1 | Sicherheit | Geplante Aufgabe als SYSTEM startete ein Skript aus `%TEMP%` des Benutzers (auch von nicht erhöhten Prozessen beschreibbar → Rechteausweitung) | ✅ `%ProgramFiles%\PhinIT\easyWINUpdate`, Besitzer Administratoren, ACL nur SYSTEM/Administratoren, fremde Ordner/Dateien werden ersetzt |
 | W2 | Sicherheit | 2× `Invoke-Expression` (`sc.exe sdset`, `schtasks`) | ✅ direkter Aufruf / Task-Scheduler-COM |
 | W3 | Sicherheit | Keine Prüfung auf Administratorrechte | ✅ Neustart mit UAC und STA |
 | W4 | Sicherheit | WSUS-Server/-Port und KB-Nummern ungeprüft | ✅ Validierung, `wusa.exe` mit vollem Pfad |

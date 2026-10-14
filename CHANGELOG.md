@@ -25,7 +25,7 @@ Vollständiger Bericht: [docs/AUDIT.md](docs/AUDIT.md).
 ### easyWINUpdate 0.2.4
 
 #### Sicherheit
-- Geplante Aufgabe (läuft als SYSTEM) führte ein Skript aus dem für Benutzer beschreibbaren `%TEMP%` aus (Rechteausweitung) – Skript liegt jetzt in `%ProgramData%\easyWINUpdate` mit Zugriff nur für SYSTEM und Administratoren.
+- Geplante Aufgabe (läuft als SYSTEM) führte ein Skript aus `%TEMP%` des Benutzers aus, das auch nicht erhöhte Prozesse verändern können (Rechteausweitung) – Skript liegt jetzt in `%ProgramFiles%\PhinIT\easyWINUpdate` (Besitzer Administratoren, Zugriff nur SYSTEM/Administratoren; fremd angelegte Ordner und vorhandene Skriptdateien werden ersetzt).
 - `Invoke-Expression` für `sc.exe sdset` und `schtasks` entfernt (direkter Aufruf mit Exit-Code-Prüfung bzw. Task-Scheduler-COM).
 - Prüfung auf Administratorrechte beim Start mit automatischem Neustart (UAC, STA).
 - WSUS-Server (Hostname) und -Port (1–65535) sowie KB-Nummern für `wusa.exe` werden validiert; `wusa.exe` mit vollem Pfad.

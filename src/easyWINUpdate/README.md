@@ -13,7 +13,7 @@ WPF-Oberfläche zur Verwaltung von Windows Updates, WSUS-Einstellungen und zur F
 | Dashboard | Systemübersicht und Update-Status |
 | Updates | Installierte Updates anzeigen/exportieren/deinstallieren, verfügbare Updates suchen (Windows-Update-API), installieren und herunterladen |
 | WSUS | Manuelle Konfiguration (Server/Port geprüft), GPO-Werte, Zielgruppe, Synchronisierung inkl. Verlauf (Ereignisse 25/26), Verbindungstest (TCP), Reset (nur WSUS-Werte) |
-| Zeitplan | Geplante Aufgabe über die Task-Scheduler-COM-Schnittstelle (Skript in `%ProgramData%\easyWINUpdate`, nur SYSTEM/Administratoren) |
+| Zeitplan | Geplante Aufgabe über die Task-Scheduler-COM-Schnittstelle (Skript in `%ProgramFiles%\PhinIT\easyWINUpdate`, nur SYSTEM/Administratoren) |
 | Troubleshooting | Fehlercode-Datenbank mit Lösungen, BITS/WaaSMedic, Registry-/Datenbank-Reparatur, DLL-Registrierung, DISM/SFC/CHKDSK (eigenes Konsolenfenster), Log-Analyse, Debug-Modus, Auto-Fix, Temp bereinigen, Winsock-Reset |
 
 Lang laufende Aktionen (Suche, Installation, Download, Deinstallation, Log-Analyse) laufen im Hintergrund – die Oberfläche bleibt bedienbar.
@@ -40,7 +40,7 @@ Parameter: keine.
 |-------|-----|
 | App-Log | `src/easyWINUpdate/Logs/easyWINUpdate_yyyyMMdd.log` (Fallback `%LOCALAPPDATA%\easyWINUpdate\Logs`) |
 | Log-Analyse | `src/easyWINUpdate/Logs/WindowsUpdate_<Zeitstempel>.log` |
-| Geplante Aufgabe | `%ProgramData%\easyWINUpdate\RunWindowsUpdate.ps1`, Protokolle in `%ProgramData%\easyWINUpdate\Logs\` |
+| Geplante Aufgabe | `%ProgramFiles%\PhinIT\easyWINUpdate\RunWindowsUpdate.ps1`, Protokolle in `%ProgramFiles%\PhinIT\easyWINUpdate\Logs\` |
 | CSV-Export | `Desktop\Installierte_Updates_<Zeitstempel>.csv` (auch bei OneDrive-Umleitung) |
 
 ## Fehlerbehebung
