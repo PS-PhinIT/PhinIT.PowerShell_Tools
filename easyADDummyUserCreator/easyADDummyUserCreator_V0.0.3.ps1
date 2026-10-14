@@ -45,9 +45,9 @@ $Global:Window = $null
 $Global:GuiControls = @{} 
 $Global:CsvData = $null 
 $Global:CreatedUsers = [System.Collections.Generic.List[object]]::new() 
-$Global:CreatedGroups = [System.Collections.Generic.List[object]]::new()
-$Global:CreatedComputers = [System.Collections.Generic.List[object]]::new()
-$Global:CreatedOUs = [System.Collections.Generic.List[object]]::new()
+$Global:CreatedGroups = [System.Collections.Generic.List[object]]::new() 
+$Global:CreatedComputers = [System.Collections.Generic.List[object]]::new() 
+$Global:CreatedOUs = [System.Collections.Generic.List[object]]::new() 
 $Global:CreatedServiceAccounts = [System.Collections.Generic.List[object]]::new()
 
 # AD Attribute Mapping Konfiguration
@@ -412,14 +412,14 @@ $XAML = @"
                 <ColumnDefinition Width="*" MinWidth="600" />
                 <ColumnDefinition Width="12" />
                 <!--  Spacer  -->
-                <ColumnDefinition Width="*" MinWidth="600" />
+                <ColumnDefinition Width="700" MinWidth="600" />
             </Grid.ColumnDefinitions>
 
             <!--  Left Panel: CSV-Based User Creation  -->
             <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="0,0,0,16">
                     <!--  Test-Umgebung Setup  -->
-                    <GroupBox Header="🏢 Test-Umgebung einrichten" Margin="0,0,0,12">
+                    <GroupBox Margin="0,0,0,12" Header="🏢 Test-Umgebung einrichten">
                         <StackPanel>
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -428,199 +428,80 @@ $XAML = @"
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <Label Grid.Column="0" Content="Firmenname:" />
-                                <TextBox x:Name="TextBoxCompanyName" Grid.Column="1" Text="TestCompany" />
+                                <TextBox
+                                    x:Name="TextBoxCompanyName"
+                                    Grid.Column="1"
+                                    Height="39"
+                                    Margin="10,0,491,0" />
                                 <Button
                                     x:Name="ButtonCreateTestEnvironment"
-                                    Grid.Column="2"
+                                    Grid.Column="1"
+                                    Margin="457,0,253,0"
                                     Content="🏗️ Umgebung erstellen"
                                     Style="{StaticResource SuccessButton}"
                                     ToolTip="Erstellt komplette Test-OU-Struktur" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Width="248"
+                                    Height="24"
+                                    Margin="695,0,0,0"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    FontSize="9"
+                                    Foreground="{StaticResource TextSecondaryBrush}"
+                                    TextWrapping="Wrap"><Run Text="OU=TestCompany" /><Run Text=" mit " /><Run Text="Unter-OUs: " /><LineBreak /><Run Text="USERS, GROUPS, COMPUTERS, SERVICES, RESOURCES" /></TextBlock>
                             </Grid>
-                            <TextBlock 
-                                Margin="0,4,0,0"
-                                FontSize="11"
-                                Foreground="{StaticResource TextSecondaryBrush}"
-                                Text="Erstellt: OU=TestCompany mit Unter-OUs: USERS, GROUPS, COMPUTERS, SERVICES, RESOURCES"
-                                TextWrapping="Wrap" />
                         </StackPanel>
                     </GroupBox>
 
                     <!--  CSV-basierte Benutzererstellung (Einklappbar)  -->
-                    <Expander Header="📋 CSV-basierte Benutzererstellung" IsExpanded="True">
+                    <!--  CSV Datei laden  -->
+                    <Expander Header="📁 CSV-Datei laden" IsExpanded="True">
                         <StackPanel>
-                            <!--  CSV Load Section  -->
-                            <GroupBox Header="📁 CSV-Datei laden" Margin="0,0,0,8">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-
-                                    <Label Grid.Row="0" Grid.Column="0" Content="CSV-Datei:" />
-                                    <TextBox
-                                        x:Name="TextBoxCsvPath"
-                                        Grid.Row="1"
-                                        Grid.Column="0"
-                                        Margin="0,0,6,0"
-                                        Text="$($Global:AppConfig.DefaultCsvPath)" />
-                                    <Button
-                                        x:Name="ButtonBrowseCsv"
-                                        Grid.Row="1"
-                                        Grid.Column="1"
-                                        Margin="0,0,6,0"
-                                        Content="📂"
-                                        Style="{StaticResource SmallButton}"
-                                        ToolTip="Durchsuchen" />
-                                    <Button
-                                        x:Name="ButtonLoadCsv"
-                                        Grid.Row="1"
-                                        Grid.Column="2"
-                                        Content="📋 Laden"
-                                        Style="{StaticResource ModernButton}" />
-                                    
-                                    <!--  CSV Preview  -->
-                                    <DataGrid
-                                        x:Name="DataGridCsvContent"
-                                        Grid.Row="2"
-                                        Grid.Column="0"
-                                        Grid.ColumnSpan="3"
-                                        Margin="0,8,0,0"
-                                        MaxHeight="200"
-                                        AutoGenerateColumns="True"
-                                        IsReadOnly="True" />
-                                </Grid>
-                            </GroupBox>
-
-                            <!--  CSV User Creation Settings  -->
-                            <GroupBox Header="⚙️ CSV-Import Einstellungen" Margin="0,0,0,8">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-
-                                    <Grid Grid.Row="0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="120" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Label Grid.Column="0" Content="Ziel-OU:" />
-                                        <ComboBox
-                                            x:Name="ComboBoxTargetOU"
-                                            Grid.Column="1"
-                                            IsEditable="True"
-                                            ToolTip="Wählen Sie eine OU oder verwenden Sie die Test-Umgebung" />
-                                    </Grid>
-
-                                    <Grid Grid.Row="1" Margin="0,4,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="120" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Label Grid.Column="0" Content="Anzahl:" />
-                                        <TextBox 
-                                            x:Name="TextBoxNumUsersToCreate" 
-                                            Grid.Column="1"
-                                            ToolTip="Leer = Alle User aus CSV" />
-                                    </Grid>
-
-                                    <Label Grid.Row="2" Margin="0,4,0,0" Content="Zu importierende Attribute:" />
-                                    <ScrollViewer
-                                        Grid.Row="3"
-                                        MaxHeight="150"
-                                        Margin="0,4,0,0"
-                                        Background="White"
-                                        BorderBrush="{StaticResource BorderBrush}"
-                                        BorderThickness="1"
-                                        VerticalScrollBarVisibility="Auto">
-                                        <StackPanel
-                                            x:Name="StackPanelAttributeSelection"
-                                            Margin="4"
-                                            Orientation="Vertical" />
-                                    </ScrollViewer>
-                                </Grid>
-                            </GroupBox>
-
-                            <!--  CSV Action Buttons  -->
-                            <GroupBox Header="🚀 CSV-Aktionen" Margin="0,0,0,8">
-                                <StackPanel>
-                                    <Button
-                                        x:Name="ButtonCreateADUsers"
-                                        Content="👥 Benutzer aus CSV erstellen"
-                                        Style="{StaticResource SuccessButton}"
-                                        ToolTip="Erstellt AD-Benutzer basierend auf CSV-Daten" />
-                                    <Grid Margin="0,4,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Button
-                                            x:Name="ButtonFillAttributes"
-                                            Grid.Column="0"
-                                            Margin="0,0,2,0"
-                                            Content="📝 Attribute befüllen"
-                                            Style="{StaticResource ModernButton}"
-                                            ToolTip="Aktualisiert Attribute bestehender Benutzer" />
-                                        <Button
-                                            x:Name="ButtonExportCreatedUsers"
-                                            Grid.Column="1"
-                                            Margin="2,0,0,0"
-                                            Content="📤 Export"
-                                            Style="{StaticResource SecondaryButton}"
-                                            ToolTip="Exportiert erstellte Benutzer" />
-                                    </Grid>
-                                </StackPanel>
-                            </GroupBox>
-
-                            <!--  CSV User Management  -->
-                            <GroupBox Header="🔧 CSV-Benutzer verwalten" Margin="0,0,0,8">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    
-                                    <Label Grid.Row="0" Grid.Column="0" Content="Anzahl:" />
-                                    <TextBox
-                                        x:Name="TextBoxNumUsersForAction"
-                                        Grid.Row="0"
-                                        Grid.Column="1"
-                                        ToolTip="Leer = Alle erstellten Benutzer" />
-                                    
-                                    <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,4,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Button
-                                            x:Name="ButtonDisableUsers"
-                                            Grid.Column="0"
-                                            Margin="0,0,2,0"
-                                            Content="🚫 Deaktivieren"
-                                            Style="{StaticResource WarningButton}" />
-                                        <Button
-                                            x:Name="ButtonDeleteUsers"
-                                            Grid.Column="1"
-                                            Margin="2,0,0,0"
-                                            Content="🗑️ Löschen"
-                                            Style="{StaticResource DangerButton}" />
-                                    </Grid>
-                                </Grid>
-                            </GroupBox>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox
+                                    x:Name="TextBoxCsvPath"
+                                    Grid.Row="1"
+                                    Grid.Column="0"
+                                    Margin="25,0,25,0"
+                                    Text="$($Global:AppConfig.DefaultCsvPath)" />
+                                <Button
+                                    x:Name="ButtonBrowseCsv"
+                                    Grid.Row="1"
+                                    Grid.Column="1"
+                                    Margin="0,3,6,3"
+                                    Content="📂 Durchsuchen"
+                                    Style="{StaticResource ModernButton}"
+                                    ToolTip="Durchsuchen" />
+                                <Button
+                                    x:Name="ButtonLoadCsv"
+                                    Grid.Row="1"
+                                    Grid.Column="2"
+                                    Margin="10,3,3,3"
+                                    Content="📋 Laden"
+                                    Style="{StaticResource ModernButton}" />
+                            </Grid>
                         </StackPanel>
                     </Expander>
+
+                    <!--  CSV Inhalt anzeigen  -->
+                    <GroupBox Header="📋 CSV Inhalt anzeigen">
+                        <DataGrid
+                            x:Name="DataGridCsvContent"
+                            Width="1040"
+                            MaxHeight="430"
+                            AutoGenerateColumns="True"
+                            IsReadOnly="True" />
+                    </GroupBox>
 
                     <!--  Fortschrittsanzeige  -->
                     <Grid
@@ -646,6 +527,142 @@ $XAML = @"
                             Minimum="0"
                             Value="0" />
                     </Grid>
+                    <Expander Header="⚙️ CSV-Import Einstellungen" IsExpanded="False">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="120" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Label Grid.Column="0" Content="Ziel-OU:" />
+                                <ComboBox
+                                    x:Name="ComboBoxTargetOU"
+                                    Grid.Column="1"
+                                    Margin="0,0,10,0"
+                                    VerticalAlignment="Top"
+                                    IsEditable="True"
+                                    ToolTip="Wählen Sie eine OU oder verwenden Sie die Test-Umgebung" />
+                            </Grid>
+
+                            <Grid Grid.Row="1" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="120" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Label Grid.Column="0" Content="Anzahl:" />
+                                <TextBox
+                                    x:Name="TextBoxNumUsersToCreate"
+                                    Grid.Column="1"
+                                    Margin="0,0,10,0"
+                                    VerticalAlignment="Top"
+                                    ToolTip="Leer = Alle User aus CSV" />
+                            </Grid>
+
+                            <Label
+                                Grid.Row="2"
+                                Margin="0,4,0,0"
+                                Content="Zu importierende Attribute:" />
+                            <ScrollViewer
+                                Grid.Row="3"
+                                MaxHeight="150"
+                                Margin="0,4,0,0"
+                                Background="White"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                VerticalScrollBarVisibility="Auto">
+                                <StackPanel
+                                    x:Name="StackPanelAttributeSelection"
+                                    Margin="4"
+                                    Orientation="Vertical" />
+                            </ScrollViewer>
+                        </Grid>
+                    </Expander>
+                    <Expander Header="🔧 CSV-Benutzer verwalten" IsExpanded="False">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Label
+                                Grid.Row="0"
+                                Grid.Column="0"
+                                Content="Anzahl:" />
+                            <TextBox
+                                x:Name="TextBoxNumUsersForAction"
+                                Grid.Row="0"
+                                Grid.ColumnSpan="2"
+                                Margin="53,0,10,0"
+                                VerticalAlignment="Top"
+                                ToolTip="Leer = Alle erstellten Benutzer" />
+
+                            <Grid
+                                Grid.Row="1"
+                                Grid.Column="0"
+                                Grid.ColumnSpan="2"
+                                Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button
+                                    x:Name="ButtonDisableUsers"
+                                    Grid.Column="0"
+                                    Margin="10,0,2,0"
+                                    Content="🚫 Deaktivieren"
+                                    Style="{StaticResource WarningButton}" />
+                                <Button
+                                    x:Name="ButtonDeleteUsers"
+                                    Grid.Column="1"
+                                    Margin="2,0,10,0"
+                                    Content="🗑️ Löschen"
+                                    Style="{StaticResource DangerButton}" />
+                            </Grid>
+                        </Grid>
+                    </Expander>
+                    <Expander Header="🚀 CSV-Aktionen" IsExpanded="True">
+                        <Grid Margin="0,6,0,5">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                x:Name="ButtonCreateADUsers"
+                                Grid.Column="1"
+                                Margin="0,0,4,0"
+                                Content="👥 Benutzer aus CSV erstellen"
+                                Style="{StaticResource SuccessButton}"
+                                ToolTip="Erstellt AD-Benutzer basierend auf CSV-Daten" />
+                            <Button
+                                x:Name="ButtonFillAttributes"
+                                Grid.Column="2"
+                                Margin="0,0,4,0"
+                                Content="📝 Attribute befüllen"
+                                Style="{StaticResource ModernButton}"
+                                ToolTip="Aktualisiert Attribute bestehender Benutzer" />
+                            <Button
+                                x:Name="ButtonExportCreatedUsers"
+                                Grid.Column="3"
+                                Margin="3,0,3,0"
+                                Content="📤 Export"
+                                Style="{StaticResource SecondaryButton}"
+                                ToolTip="Exportiert erstellte Benutzer" />
+                        </Grid>
+                    </Expander>
                 </StackPanel>
             </ScrollViewer>
 
@@ -666,7 +683,10 @@ $XAML = @"
                             </Grid.RowDefinitions>
 
                             <!--  Schnell-Erstellung  -->
-                            <GroupBox Grid.Row="0" Header="🚀 Schnell-Erstellung" Margin="0,0,0,8">
+                            <GroupBox
+                                Grid.Row="0"
+                                Margin="0,0,0,8"
+                                Header="🚀 Schnell-Erstellung">
                                 <UniformGrid Columns="2" Rows="2">
                                     <Button
                                         x:Name="ButtonQuickRandomUsers"
@@ -696,15 +716,22 @@ $XAML = @"
                             </GroupBox>
 
                             <!--  Objekt-Verwaltung  -->
-                            <GroupBox Grid.Row="1" Header="📊 Objekt-Verwaltung" Margin="0,0,0,8">
+                            <GroupBox
+                                Grid.Row="1"
+                                Margin="0,0,0,8"
+                                Header="📊 Objekt-Verwaltung">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
-                                    
+
                                     <!--  Lösch-Buttons  -->
-                                    <UniformGrid Grid.Row="0" Rows="2" Columns="2" Margin="0,0,0,4">
+                                    <UniformGrid
+                                        Grid.Row="0"
+                                        Margin="0,0,0,4"
+                                        Columns="2"
+                                        Rows="2">
                                         <Button
                                             x:Name="ButtonDeleteGroups"
                                             Margin="2"
@@ -730,7 +757,7 @@ $XAML = @"
                                             Style="{StaticResource SmallButton}"
                                             ToolTip="Löscht alle Service Accounts" />
                                     </UniformGrid>
-                                    
+
                                     <!--  Export Button  -->
                                     <Button
                                         x:Name="ButtonExportAll"
@@ -778,28 +805,58 @@ $XAML = @"
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
 
-                                <Border Grid.Column="0" Margin="2" Padding="4" Background="{StaticResource SurfaceBrush}" CornerRadius="4">
+                                <Border
+                                    Grid.Column="0"
+                                    Margin="2"
+                                    Padding="4"
+                                    Background="{StaticResource SurfaceBrush}"
+                                    CornerRadius="4">
                                     <StackPanel HorizontalAlignment="Center">
                                         <TextBlock FontSize="12" Text="👥 Benutzer" />
-                                        <TextBlock x:Name="TextBlockUserCount" FontSize="16" FontWeight="Bold" Text="0" HorizontalAlignment="Center" />
+                                        <TextBlock
+                                            x:Name="TextBlockUserCount"
+                                            HorizontalAlignment="Center"
+                                            FontSize="16"
+                                            FontWeight="Bold"
+                                            Text="0" />
                                     </StackPanel>
                                 </Border>
 
-                                <Border Grid.Column="1" Margin="2" Padding="4" Background="{StaticResource SurfaceBrush}" CornerRadius="4">
+                                <Border
+                                    Grid.Column="1"
+                                    Margin="2"
+                                    Padding="4"
+                                    Background="{StaticResource SurfaceBrush}"
+                                    CornerRadius="4">
                                     <StackPanel HorizontalAlignment="Center">
                                         <TextBlock FontSize="12" Text="🏢 Gruppen" />
-                                        <TextBlock x:Name="TextBlockGroupCount" FontSize="16" FontWeight="Bold" Text="0" HorizontalAlignment="Center" />
+                                        <TextBlock
+                                            x:Name="TextBlockGroupCount"
+                                            HorizontalAlignment="Center"
+                                            FontSize="16"
+                                            FontWeight="Bold"
+                                            Text="0" />
                                     </StackPanel>
                                 </Border>
 
-                                <Border Grid.Column="2" Margin="2" Padding="4" Background="{StaticResource SurfaceBrush}" CornerRadius="4">
+                                <Border
+                                    Grid.Column="2"
+                                    Margin="2"
+                                    Padding="4"
+                                    Background="{StaticResource SurfaceBrush}"
+                                    CornerRadius="4">
                                     <StackPanel HorizontalAlignment="Center">
                                         <TextBlock FontSize="12" Text="💻 Computer" />
-                                        <TextBlock x:Name="TextBlockComputerCount" FontSize="16" FontWeight="Bold" Text="0" HorizontalAlignment="Center" />
+                                        <TextBlock
+                                            x:Name="TextBlockComputerCount"
+                                            HorizontalAlignment="Center"
+                                            FontSize="16"
+                                            FontWeight="Bold"
+                                            Text="0" />
                                     </StackPanel>
                                 </Border>
                             </Grid>
-                            
+
                             <Grid Margin="0,4,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -807,24 +864,54 @@ $XAML = @"
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
 
-                                <Border Grid.Column="0" Margin="2" Padding="4" Background="{StaticResource SurfaceBrush}" CornerRadius="4">
+                                <Border
+                                    Grid.Column="0"
+                                    Margin="2"
+                                    Padding="4"
+                                    Background="{StaticResource SurfaceBrush}"
+                                    CornerRadius="4">
                                     <StackPanel HorizontalAlignment="Center">
                                         <TextBlock FontSize="12" Text="🏗️ OUs" />
-                                        <TextBlock x:Name="TextBlockOUCount" FontSize="16" FontWeight="Bold" Text="0" HorizontalAlignment="Center" />
+                                        <TextBlock
+                                            x:Name="TextBlockOUCount"
+                                            HorizontalAlignment="Center"
+                                            FontSize="16"
+                                            FontWeight="Bold"
+                                            Text="0" />
                                     </StackPanel>
                                 </Border>
 
-                                <Border Grid.Column="1" Margin="2" Padding="4" Background="{StaticResource SurfaceBrush}" CornerRadius="4">
+                                <Border
+                                    Grid.Column="1"
+                                    Margin="2"
+                                    Padding="4"
+                                    Background="{StaticResource SurfaceBrush}"
+                                    CornerRadius="4">
                                     <StackPanel HorizontalAlignment="Center">
                                         <TextBlock FontSize="12" Text="⚙️ Services" />
-                                        <TextBlock x:Name="TextBlockServiceCount" FontSize="16" FontWeight="Bold" Text="0" HorizontalAlignment="Center" />
+                                        <TextBlock
+                                            x:Name="TextBlockServiceCount"
+                                            HorizontalAlignment="Center"
+                                            FontSize="16"
+                                            FontWeight="Bold"
+                                            Text="0" />
                                     </StackPanel>
                                 </Border>
 
-                                <Border Grid.Column="2" Margin="2" Padding="4" Background="{StaticResource SurfaceBrush}" CornerRadius="4">
+                                <Border
+                                    Grid.Column="2"
+                                    Margin="2"
+                                    Padding="4"
+                                    Background="{StaticResource SurfaceBrush}"
+                                    CornerRadius="4">
                                     <StackPanel HorizontalAlignment="Center">
                                         <TextBlock FontSize="12" Text="🎯 Gesamt" />
-                                        <TextBlock x:Name="TextBlockTotalCount" FontSize="16" FontWeight="Bold" Text="0" HorizontalAlignment="Center" />
+                                        <TextBlock
+                                            x:Name="TextBlockTotalCount"
+                                            HorizontalAlignment="Center"
+                                            FontSize="16"
+                                            FontWeight="Bold"
+                                            Text="0" />
                                     </StackPanel>
                                 </Border>
                             </Grid>
@@ -832,7 +919,7 @@ $XAML = @"
                     </GroupBox>
 
                     <!--  1. Random Benutzer-Erstellung (Hauptbereich)  -->
-                    <Expander Header="🎲 Random Benutzer-Erstellung" IsExpanded="True">
+                    <Expander Header="🎲 Random Benutzer-Erstellung" IsExpanded="False">
                         <StackPanel>
                             <!--  Random User Einstellungen  -->
                             <GroupBox Margin="0,0,0,8" Header="⚙️ Random-Benutzer Einstellungen">
@@ -844,42 +931,64 @@ $XAML = @"
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
-                                    
+
                                     <Grid Grid.Row="0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <Label Grid.Column="0" Content="Anzahl Benutzer:" />
-                                        <TextBox 
-                                            x:Name="TextBoxRandomUserCount" 
-                                            Grid.Column="1" 
-                                            Text="50" 
+                                        <TextBox
+                                            x:Name="TextBoxRandomUserCount"
+                                            Grid.Column="1"
+                                            Text="50"
                                             ToolTip="Anzahl der zu erstellenden Random-Benutzer" />
                                     </Grid>
-                                    
-                                    <Label Grid.Row="1" Margin="0,4,0,0" Content="Zufällige Attribute:" />
+
+                                    <Label
+                                        Grid.Row="1"
+                                        Margin="0,4,0,0"
+                                        Content="Zufällige Attribute:" />
                                     <Grid Grid.Row="2">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
-                                            <CheckBox x:Name="CheckBoxRandomNames" Content="Namen" IsChecked="True" />
-                                            <CheckBox x:Name="CheckBoxRandomAddresses" Content="Adressen" IsChecked="True" />
-                                            <CheckBox x:Name="CheckBoxRandomPhone" Content="Telefon" IsChecked="True" />
+                                            <CheckBox
+                                                x:Name="CheckBoxRandomNames"
+                                                Content="Namen"
+                                                IsChecked="True" />
+                                            <CheckBox
+                                                x:Name="CheckBoxRandomAddresses"
+                                                Content="Adressen"
+                                                IsChecked="True" />
+                                            <CheckBox
+                                                x:Name="CheckBoxRandomPhone"
+                                                Content="Telefon"
+                                                IsChecked="True" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="1">
-                                            <CheckBox x:Name="CheckBoxRandomDepartments" Content="Abteilungen" IsChecked="True" />
-                                            <CheckBox x:Name="CheckBoxRandomTitles" Content="Titel" IsChecked="True" />
-                                            <CheckBox x:Name="CheckBoxRandomCompany" Content="Firma" IsChecked="True" />
+                                            <CheckBox
+                                                x:Name="CheckBoxRandomDepartments"
+                                                Content="Abteilungen"
+                                                IsChecked="True" />
+                                            <CheckBox
+                                                x:Name="CheckBoxRandomTitles"
+                                                Content="Titel"
+                                                IsChecked="True" />
+                                            <CheckBox
+                                                x:Name="CheckBoxRandomCompany"
+                                                Content="Firma"
+                                                IsChecked="True" />
                                         </StackPanel>
                                     </Grid>
-                                    
-                                    <Label Grid.Row="3" Margin="0,4,0,0" Content="Passwort-Komplexität:" />
-                                    <ComboBox
-                                        x:Name="ComboBoxPasswordComplexity"
-                                        Grid.Row="4">
+
+                                    <Label
+                                        Grid.Row="3"
+                                        Margin="0,4,0,0"
+                                        Content="Passwort-Komplexität:" />
+                                    <ComboBox x:Name="ComboBoxPasswordComplexity" Grid.Row="4">
                                         <ComboBoxItem Content="Einfach (8 Zeichen)" />
                                         <ComboBoxItem Content="Mittel (12 Zeichen + Symbole)" IsSelected="True" />
                                         <ComboBoxItem Content="Komplex (16 Zeichen + Spezial)" />
@@ -901,21 +1010,21 @@ $XAML = @"
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <CheckBox 
-                                            x:Name="CheckBoxIncludeNumbers" 
+                                        <CheckBox
+                                            x:Name="CheckBoxIncludeNumbers"
                                             Grid.Column="0"
-                                            Content="Zahlen in Passwörtern" 
+                                            Content="Zahlen in Passwörtern"
                                             IsChecked="True" />
-                                        <CheckBox 
-                                            x:Name="CheckBoxIncludeSymbols" 
+                                        <CheckBox
+                                            x:Name="CheckBoxIncludeSymbols"
                                             Grid.Column="1"
-                                            Content="Symbole in Passwörtern" 
+                                            Content="Symbole in Passwörtern"
                                             IsChecked="True" />
                                     </Grid>
-                                    <CheckBox 
-                                        x:Name="CheckBoxExcludeAmbiguous" 
+                                    <CheckBox
+                                        x:Name="CheckBoxExcludeAmbiguous"
                                         Margin="0,2,0,0"
-                                        Content="Mehrdeutige Zeichen vermeiden (0/O, 1/l)" 
+                                        Content="Mehrdeutige Zeichen vermeiden (0/O, 1/l)"
                                         IsChecked="True" />
                                 </StackPanel>
                             </GroupBox>
@@ -923,15 +1032,9 @@ $XAML = @"
                             <!--  Erweiterte Random-Optionen  -->
                             <GroupBox Margin="0,0,0,8" Header="🎯 Erweiterte Optionen">
                                 <StackPanel>
-                                    <CheckBox 
-                                        x:Name="CheckBoxGenerateAvatars" 
-                                        Content="Automatisch Avatare generieren" />
-                                    <CheckBox 
-                                        x:Name="CheckBoxSetExpiryDate" 
-                                        Content="Ablaufdatum setzen" />
-                                    <CheckBox 
-                                        x:Name="CheckBoxTemporaryAccount" 
-                                        Content="Als temporäre Accounts (30 Tage)" />
+                                    <CheckBox x:Name="CheckBoxGenerateAvatars" Content="Automatisch Avatare generieren" />
+                                    <CheckBox x:Name="CheckBoxSetExpiryDate" Content="Ablaufdatum setzen" />
+                                    <CheckBox x:Name="CheckBoxTemporaryAccount" Content="Als temporäre Accounts (30 Tage)" />
                                     <Button
                                         x:Name="ButtonGenerateRandomData"
                                         Margin="0,4,0,0"
@@ -950,7 +1053,10 @@ $XAML = @"
                         <StackPanel>
                             <GroupBox Margin="0,0,0,8" Header="📊 Automatische Gruppenerstellung">
                                 <StackPanel>
-                                    <CheckBox x:Name="CheckBoxCreateDepartmentGroups" Content="Abteilungsgruppen erstellen" IsChecked="True" />
+                                    <CheckBox
+                                        x:Name="CheckBoxCreateDepartmentGroups"
+                                        Content="Abteilungsgruppen erstellen"
+                                        IsChecked="True" />
                                     <CheckBox x:Name="CheckBoxCreateLocationGroups" Content="Standortgruppen erstellen" />
                                     <CheckBox x:Name="CheckBoxCreateJobTitleGroups" Content="Jobbezeichnungsgruppen erstellen" />
                                     <Button
@@ -990,7 +1096,10 @@ $XAML = @"
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <Label Grid.Column="0" Content="Anzahl:" />
-                                        <TextBox x:Name="TextBoxComputerCount" Grid.Column="1" Text="20" />
+                                        <TextBox
+                                            x:Name="TextBoxComputerCount"
+                                            Grid.Column="1"
+                                            Text="20" />
                                     </Grid>
                                     <ComboBox x:Name="ComboBoxComputerType" Margin="0,4,0,0">
                                         <ComboBoxItem Content="Workstations" IsSelected="True" />
@@ -998,7 +1107,11 @@ $XAML = @"
                                         <ComboBoxItem Content="Server" />
                                         <ComboBoxItem Content="Virtual Machines" />
                                     </ComboBox>
-                                    <CheckBox x:Name="CheckBoxRandomComputerNames" Margin="0,4,0,0" Content="Zufällige Namen generieren" IsChecked="True" />
+                                    <CheckBox
+                                        x:Name="CheckBoxRandomComputerNames"
+                                        Margin="0,4,0,0"
+                                        Content="Zufällige Namen generieren"
+                                        IsChecked="True" />
                                     <Button
                                         x:Name="ButtonCreateComputers"
                                         Margin="0,4,0,0"
@@ -1021,7 +1134,10 @@ $XAML = @"
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <Label Grid.Column="0" Content="Anzahl:" />
-                                        <TextBox x:Name="TextBoxServiceAccountCount" Grid.Column="1" Text="5" />
+                                        <TextBox
+                                            x:Name="TextBoxServiceAccountCount"
+                                            Grid.Column="1"
+                                            Text="5" />
                                     </Grid>
                                     <Button
                                         x:Name="ButtonCreateServiceAccounts"
@@ -1039,21 +1155,29 @@ $XAML = @"
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <Label Grid.Column="0" Content="BitLocker Keys für:" />
-                                        <TextBox x:Name="TextBoxBitLockerComputerCount" Grid.Column="1" Text="10" ToolTip="Anzahl Computer" />
+                                        <TextBox
+                                            x:Name="TextBoxBitLockerComputerCount"
+                                            Grid.Column="1"
+                                            Text="10"
+                                            ToolTip="Anzahl Computer" />
                                     </Grid>
                                     <Button
                                         x:Name="ButtonCreateBitLockerData"
                                         Margin="0,4,0,0"
                                         Content="🔐 BitLocker Keys generieren"
                                         Style="{StaticResource ModernButton}" />
-                                    
+
                                     <Grid Margin="0,8,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <Label Grid.Column="0" Content="LAPS für:" />
-                                        <TextBox x:Name="TextBoxLAPSSystemCount" Grid.Column="1" Text="10" ToolTip="Anzahl Systeme" />
+                                        <TextBox
+                                            x:Name="TextBoxLAPSSystemCount"
+                                            Grid.Column="1"
+                                            Text="10"
+                                            ToolTip="Anzahl Systeme" />
                                     </Grid>
                                     <Button
                                         x:Name="ButtonCreateLAPSData"
@@ -1444,7 +1568,8 @@ function Get-GuiControls {
             'ButtonCreateDNSEntries', 'CheckBoxSIDHistory', 'CheckBoxTrustRelationships',
             'TextBoxSourceDomain', 'ButtonSimulateMigration', 'CheckBoxCreateSPNs',
             'CheckBoxKerberosConstraints', 'ComboBoxKerberosService', 'ButtonCreateKerberosTests',
-            'CheckBoxDocumentFSMO', 'CheckBoxExportDomainInfo', 'ButtonDocumentFSMO'
+            'CheckBoxDocumentFSMO', 'CheckBoxExportDomainInfo', 'ButtonDocumentFSMO',
+            'ButtonCreateAdvancedFeatures'
         )
         
         foreach ($controlName in $expectedControls) {
@@ -2323,70 +2448,72 @@ function Validate-TargetOU {
 }
 
 function Register-EventHandlers { 
-    $Global:GuiControls.ButtonBrowseCsv.Add_Click({ Show-CsvBrowser })
-    $Global:GuiControls.ButtonLoadCsv.Add_Click({ Import-CsvData }) 
-    $Global:GuiControls.ButtonCreateADUsers.Add_Click({ New-ADUsersFromCsv }) 
-    $Global:GuiControls.ButtonFillAttributes.Add_Click({ Set-ADUserAttributesFromCsv }) 
-    $Global:GuiControls.ButtonDisableUsers.Add_Click({ Disable-CreatedADUsers })
-    $Global:GuiControls.ButtonDeleteUsers.Add_Click({ Remove-CreatedADUsers })
-    $Global:GuiControls.ButtonExportCreatedUsers.Add_Click({ Export-CreatedUsers })
-    $Global:GuiControls.ButtonApplySecuritySettings.Add_Click({ Apply-SecuritySettings })
-    $Global:GuiControls.ButtonAssignToGroups.Add_Click({ Add-ToGroup })
+    # CSV-basierte Funktionen
+    if ($Global:GuiControls.ButtonBrowseCsv) { $Global:GuiControls.ButtonBrowseCsv.Add_Click({ Show-CsvBrowser }) }
+    if ($Global:GuiControls.ButtonLoadCsv) { $Global:GuiControls.ButtonLoadCsv.Add_Click({ Import-CsvData }) }
+    if ($Global:GuiControls.ButtonCreateADUsers) { $Global:GuiControls.ButtonCreateADUsers.Add_Click({ New-ADUsersFromCsv }) }
+    if ($Global:GuiControls.ButtonFillAttributes) { $Global:GuiControls.ButtonFillAttributes.Add_Click({ Set-ADUserAttributesFromCsv }) }
+    if ($Global:GuiControls.ButtonDisableUsers) { $Global:GuiControls.ButtonDisableUsers.Add_Click({ Disable-CreatedADUsers }) }
+    if ($Global:GuiControls.ButtonDeleteUsers) { $Global:GuiControls.ButtonDeleteUsers.Add_Click({ Remove-CreatedADUsers }) }
+    if ($Global:GuiControls.ButtonExportCreatedUsers) { $Global:GuiControls.ButtonExportCreatedUsers.Add_Click({ Export-CreatedUsers }) }
+    if ($Global:GuiControls.ButtonApplySecuritySettings) { $Global:GuiControls.ButtonApplySecuritySettings.Add_Click({ Apply-SecuritySettings }) }
+    #if ($Global:GuiControls.ButtonAssignToGroups) { $Global:GuiControls.ButtonAssignToGroups.Add_Click({ Add-ToGroup }) }
     
     # Neue Event Handler für Benutzer-Erstellung & Verwaltung
-    $Global:GuiControls.ButtonGeneratePasswords.Add_Click({ Generate-BulkPasswords })
-    $Global:GuiControls.ButtonGenerateRandomData.Add_Click({ Generate-BulkRandomData })
-    $Global:GuiControls.ButtonCreateFromTemplate.Add_Click({ Create-UsersFromTemplate })
-    $Global:GuiControls.ButtonBrowseTemplateUser.Add_Click({ Browse-TemplateUser })
-    $Global:GuiControls.ButtonSetTimeRestrictions.Add_Click({ Set-UserTimeRestrictions })
-    $Global:GuiControls.ButtonBrowseAvatars.Add_Click({ Browse-AvatarPath })
-    $Global:GuiControls.ButtonAssignAvatars.Add_Click({ Assign-UserAvatars })
+    #if ($Global:GuiControls.ButtonGeneratePasswords) { $Global:GuiControls.ButtonGeneratePasswords.Add_Click({ Generate-BulkPasswords }) }
+    if ($Global:GuiControls.ButtonGenerateRandomData) { $Global:GuiControls.ButtonGenerateRandomData.Add_Click({ Generate-BulkRandomData }) }
+    #if ($Global:GuiControls.ButtonCreateFromTemplate) { $Global:GuiControls.ButtonCreateFromTemplate.Add_Click({ Create-UsersFromTemplate }) }
+    #if ($Global:GuiControls.ButtonBrowseTemplateUser) { $Global:GuiControls.ButtonBrowseTemplateUser.Add_Click({ Browse-TemplateUser }) }
+    #if ($Global:GuiControls.ButtonSetTimeRestrictions) { $Global:GuiControls.ButtonSetTimeRestrictions.Add_Click({ Set-UserTimeRestrictions }) }
+    #if ($Global:GuiControls.ButtonBrowseAvatars) { $Global:GuiControls.ButtonBrowseAvatars.Add_Click({ Browse-AvatarPath }) }
+    #if ($Global:GuiControls.ButtonAssignAvatars) { $Global:GuiControls.ButtonAssignAvatars.Add_Click({ Assign-UserAvatars }) }
     
     # Schnellzugriff Event Handler
-    $Global:GuiControls.ButtonQuickRandomUsers.Add_Click({ Quick-CreateRandomUsers })
-    $Global:GuiControls.ButtonQuickCreateGroups.Add_Click({ Quick-CreateGroups })
-    $Global:GuiControls.ButtonQuickTestData.Add_Click({ Quick-CreateTestData })
-    $Global:GuiControls.ButtonQuickCleanup.Add_Click({ Quick-CleanupAll })
+    if ($Global:GuiControls.ButtonQuickRandomUsers) { $Global:GuiControls.ButtonQuickRandomUsers.Add_Click({ Quick-CreateRandomUsers }) }
+    if ($Global:GuiControls.ButtonQuickCreateGroups) { $Global:GuiControls.ButtonQuickCreateGroups.Add_Click({ Quick-CreateGroups }) }
+    if ($Global:GuiControls.ButtonQuickTestData) { $Global:GuiControls.ButtonQuickTestData.Add_Click({ Quick-CreateTestData }) }
+    if ($Global:GuiControls.ButtonQuickCleanup) { $Global:GuiControls.ButtonQuickCleanup.Add_Click({ Quick-CleanupAll }) }
     
     # Löschfunktionen Event Handler
-    $Global:GuiControls.ButtonDeleteGroups.Add_Click({ Remove-CreatedGroups })
-    $Global:GuiControls.ButtonDeleteComputers.Add_Click({ Remove-CreatedComputers })
-    $Global:GuiControls.ButtonDeleteOUs.Add_Click({ Remove-CreatedOUs })
-    $Global:GuiControls.ButtonDeleteServiceAccounts.Add_Click({ Remove-CreatedServiceAccounts })
-    $Global:GuiControls.ButtonExportAll.Add_Click({ Export-AllObjects })
+    if ($Global:GuiControls.ButtonDeleteGroups) { $Global:GuiControls.ButtonDeleteGroups.Add_Click({ Remove-CreatedGroups }) }
+    if ($Global:GuiControls.ButtonDeleteComputers) { $Global:GuiControls.ButtonDeleteComputers.Add_Click({ Remove-CreatedComputers }) }
+    if ($Global:GuiControls.ButtonDeleteOUs) { $Global:GuiControls.ButtonDeleteOUs.Add_Click({ Remove-CreatedOUs }) }
+    if ($Global:GuiControls.ButtonDeleteServiceAccounts) { $Global:GuiControls.ButtonDeleteServiceAccounts.Add_Click({ Remove-CreatedServiceAccounts }) }
+    if ($Global:GuiControls.ButtonExportAll) { $Global:GuiControls.ButtonExportAll.Add_Click({ Export-AllObjects }) }
     
     # Test-Umgebung Event Handler
-    $Global:GuiControls.ButtonCreateTestEnvironment.Add_Click({ Create-TestEnvironment })
-    $Global:GuiControls.ButtonCreateRandomUsers.Add_Click({ Create-RandomUsers })
+    if ($Global:GuiControls.ButtonCreateTestEnvironment) { $Global:GuiControls.ButtonCreateTestEnvironment.Add_Click({ Create-TestEnvironment }) }
+    if ($Global:GuiControls.ButtonCreateRandomUsers) { $Global:GuiControls.ButtonCreateRandomUsers.Add_Click({ Create-RandomUsers }) }
     
     # Event Handler für Gruppen & Organisationsstruktur
-    $Global:GuiControls.ButtonCreateAutoGroups.Add_Click({ Create-AutomaticGroups })
-    $Global:GuiControls.ButtonCreateNestedGroups.Add_Click({ Create-NestedGroupStructure })
-    $Global:GuiControls.ButtonCreateDynamicGroups.Add_Click({ Create-DynamicSecurityGroups })
-    $Global:GuiControls.ButtonCreateOUStructure.Add_Click({ Create-OrganizationalUnitStructure })
+    if ($Global:GuiControls.ButtonCreateAutoGroups) { $Global:GuiControls.ButtonCreateAutoGroups.Add_Click({ Create-AutomaticGroups }) }
+    if ($Global:GuiControls.ButtonCreateNestedGroups) { $Global:GuiControls.ButtonCreateNestedGroups.Add_Click({ Create-NestedGroupStructure }) }
+    #if ($Global:GuiControls.ButtonCreateDynamicGroups) { $Global:GuiControls.ButtonCreateDynamicGroups.Add_Click({ Create-DynamicSecurityGroups }) }
+    #if ($Global:GuiControls.ButtonCreateOUStructure) { $Global:GuiControls.ButtonCreateOUStructure.Add_Click({ Create-OrganizationalUnitStructure }) }
     
     # Event Handler für Computer & Geräte
-    $Global:GuiControls.ButtonCreateComputers.Add_Click({ Create-ComputerObjects })
-    $Global:GuiControls.ButtonCreateServiceAccounts.Add_Click({ Create-ServiceAccounts })
-    $Global:GuiControls.ButtonCreatePrinters.Add_Click({ Create-PrinterObjects })
-    $Global:GuiControls.ButtonCreateBitLockerData.Add_Click({ Create-ComputerBitLockerData })
-    $Global:GuiControls.ButtonCreateLAPSData.Add_Click({ Create-LAPSData })
+    if ($Global:GuiControls.ButtonCreateComputers) { $Global:GuiControls.ButtonCreateComputers.Add_Click({ Create-ComputerObjects }) }
+    if ($Global:GuiControls.ButtonCreateServiceAccounts) { $Global:GuiControls.ButtonCreateServiceAccounts.Add_Click({ Create-ServiceAccounts }) }
+    #if ($Global:GuiControls.ButtonCreatePrinters) { $Global:GuiControls.ButtonCreatePrinters.Add_Click({ Create-PrinterObjects }) }
+    if ($Global:GuiControls.ButtonCreateBitLockerData) { $Global:GuiControls.ButtonCreateBitLockerData.Add_Click({ Create-ComputerBitLockerData }) }
+    if ($Global:GuiControls.ButtonCreateLAPSData) { $Global:GuiControls.ButtonCreateLAPSData.Add_Click({ Create-LAPSData }) }
     
     # Event Handler für Test-Szenarien
-    $Global:GuiControls.ButtonCreateTestDataSet.Add_Click({ Create-TestDataSet })
-    $Global:GuiControls.ButtonActivateChaosMode.Add_Click({ Activate-ChaosMode })
-    $Global:GuiControls.ButtonStartPerformanceTest.Add_Click({ Start-PerformanceTest })
+    if ($Global:GuiControls.ButtonCreateTestDataSet) { $Global:GuiControls.ButtonCreateTestDataSet.Add_Click({ Create-TestDataSet }) }
+    if ($Global:GuiControls.ButtonActivateChaosMode) { $Global:GuiControls.ButtonActivateChaosMode.Add_Click({ Activate-ChaosMode }) }
+    #if ($Global:GuiControls.ButtonStartPerformanceTest) { $Global:GuiControls.ButtonStartPerformanceTest.Add_Click({ Start-PerformanceTest }) }
     
     # Event Handler für Sicherheit & Compliance
-    $Global:GuiControls.ButtonApplyPasswordPolicies.Add_Click({ Apply-PasswordPolicies })
-    $Global:GuiControls.ButtonCreateRBACRoles.Add_Click({ Create-RBACRoles })
-    $Global:GuiControls.ButtonCreateBitLockerKeys.Add_Click({ Create-BitLockerKeys })
+    if ($Global:GuiControls.ButtonApplyPasswordPolicies) { $Global:GuiControls.ButtonApplyPasswordPolicies.Add_Click({ Apply-PasswordPolicies }) }
+    if ($Global:GuiControls.ButtonCreateRBACRoles) { $Global:GuiControls.ButtonCreateRBACRoles.Add_Click({ Create-RBACRoles }) }
+    #if ($Global:GuiControls.ButtonCreateBitLockerKeys) { $Global:GuiControls.ButtonCreateBitLockerKeys.Add_Click({ Create-BitLockerKeys }) }
     
     # Event Handler für Erweiterte Features
-    $Global:GuiControls.ButtonCreateDNSEntries.Add_Click({ Create-DNSEntries })
-    $Global:GuiControls.ButtonSimulateMigration.Add_Click({ Simulate-Migration })
-    $Global:GuiControls.ButtonCreateKerberosTests.Add_Click({ Create-KerberosTests })
-    $Global:GuiControls.ButtonDocumentFSMO.Add_Click({ Document-FSMORoles })
+    #if ($Global:GuiControls.ButtonCreateDNSEntries) { $Global:GuiControls.ButtonCreateDNSEntries.Add_Click({ Create-DNSEntries }) }
+    #if ($Global:GuiControls.ButtonSimulateMigration) { $Global:GuiControls.ButtonSimulateMigration.Add_Click({ Simulate-Migration }) }
+    #if ($Global:GuiControls.ButtonCreateKerberosTests) { $Global:GuiControls.ButtonCreateKerberosTests.Add_Click({ Create-KerberosTests }) }
+    #if ($Global:GuiControls.ButtonDocumentFSMO) { $Global:GuiControls.ButtonDocumentFSMO.Add_Click({ Document-FSMORoles }) }
+    if ($Global:GuiControls.ButtonCreateAdvancedFeatures) { $Global:GuiControls.ButtonCreateAdvancedFeatures.Add_Click({ Create-AdvancedFeatures }) }
  
     Write-Log "Event Handler registriert." 
 } 
@@ -5652,7 +5779,7 @@ function Create-ComputerBitLockerData {
         
         # Anzahl der Computer bestimmen
         $computerCount = $Global:GuiControls.TextBoxBitLockerComputerCount.Text
-        $randomSelection = $Global:GuiControls.CheckBoxBitLockerRandomSelection.IsChecked
+        $randomSelection = $false  # CheckBox existiert nicht in der GUI
         
         if ([string]::IsNullOrWhiteSpace($computerCount)) {
             $computerCount = $Global:CreatedComputers.Count
@@ -5837,8 +5964,8 @@ function Create-LAPSData {
         
         # Parameter auslesen
         $systemCount = $Global:GuiControls.TextBoxLAPSSystemCount.Text
-        $includeServers = $Global:GuiControls.CheckBoxLAPSIncludeServers.IsChecked
-        $includeWorkstations = $Global:GuiControls.CheckBoxLAPSIncludeWorkstations.IsChecked
+        $includeServers = $true  # CheckBox existiert nicht in der GUI, Standard: Ja
+        $includeWorkstations = $true  # CheckBox existiert nicht in der GUI, Standard: Ja
         
         if (-not ($includeServers -or $includeWorkstations)) {
             Write-Log "Keine System-Typen für LAPS ausgewählt" -Level "WARN"
@@ -6093,7 +6220,7 @@ function Create-TestDataSet {
         }
         
         $realisticData = $Global:GuiControls.CheckBoxRealisticData.IsChecked
-        $historicalData = $Global:GuiControls.CheckBoxHistoricalData.IsChecked
+        $historicalData = $false  # CheckBox existiert nicht in der GUI
         
         # Bestimme Anzahl der zu erstellenden Objekte
         $objectCounts = switch ($dataSize.Content) {
@@ -6349,7 +6476,7 @@ function Activate-ChaosMode {
         $invalidData = $Global:GuiControls.CheckBoxInvalidData.IsChecked
         $missingAttributes = $Global:GuiControls.CheckBoxMissingAttributes.IsChecked
         $duplicateEntries = $Global:GuiControls.CheckBoxDuplicateEntries.IsChecked
-        $specialCharacters = $Global:GuiControls.CheckBoxSpecialCharacters.IsChecked
+        $specialCharacters = $false  # CheckBox existiert nicht in der GUI
         
         if (-not ($invalidData -or $missingAttributes -or $duplicateEntries -or $specialCharacters)) {
             Write-Log "Keine Chaos-Optionen ausgewählt" -Level "WARN"
@@ -6702,7 +6829,7 @@ function Apply-PasswordPolicies {
         $simulateHistory = $Global:GuiControls.CheckBoxSimulatePasswordHistory.IsChecked
         $createLocked = $Global:GuiControls.CheckBoxCreateLockedAccounts.IsChecked
         $expiredPasswords = $Global:GuiControls.CheckBoxExpiredPasswords.IsChecked
-        $lockoutRatio = $Global:GuiControls.SliderLockoutRatio.Value
+        $lockoutRatio = 10  # Slider existiert nicht in der GUI, Standard: 10%
         
         if (-not ($simulateHistory -or $createLocked -or $expiredPasswords)) {
             Write-Log "Keine Passwort-Richtlinien ausgewählt" -Level "WARN"
@@ -6850,12 +6977,8 @@ function Create-RBACRoles {
             return
         }
         
-        $roleCount = $Global:GuiControls.TextBoxRoleCount.Text
-        if ([string]::IsNullOrWhiteSpace($roleCount)) {
-            $roleCount = 5 # Default
-        } else {
-            $roleCount = [int]$roleCount
-        }
+        # TextBoxRoleCount existiert nicht in der GUI, verwende Default
+        $roleCount = 5
         
         if ($roleCount -le 0) {
             Write-Log "Ungültige Anzahl RBAC-Rollen" -Level "WARN"
@@ -7333,7 +7456,7 @@ DNS-Records dokumentiert in:
 $dnsFile
 
 Erstellte Record-Typen:
-$(if ($createA -or $createDNS) { "- A-Records mit IPs im Bereich $ipBase*`n" })$(if ($createCNAME) { "- CNAME-Aliases (www, mail, ftp)`n" })$(if ($createA -or $createDNS) { "- PTR-Records für Reverse-DNS" })
+$(if ($createA -or $createDNS) { "- A-Records mit IPs im Bereich $ipBase*`n" })$(if ($createCNAME) { "- CNAME-Aliase (www, mail, ftp)`n" })$(if ($createA -or $createDNS) { "- PTR-Records für Reverse-DNS" })
 "@
         
         [System.Windows.MessageBox]::Show($message, "DNS-Einträge erstellt", "OK", "Information")
@@ -7940,6 +8063,227 @@ $(if ($exportDomainInfo -and $dcFile) { "DC-Liste: $dcFile" })
     }
 }
 
+function Create-AdvancedFeatures {
+    <#
+    .SYNOPSIS
+    Führt erweiterte Features für Test-Umgebungen aus
+    
+    .DESCRIPTION
+    Erstellt DNS-Einträge, Service Principal Names (SPNs) und dokumentiert FSMO-Rollen
+    #>
+    try {
+        Write-Log "Starte Ausführung erweiterter Features..." -Level "INFO"
+        
+        $createDNS = $Global:GuiControls.CheckBoxCreateDNSEntries.IsChecked
+        $createSPNs = $Global:GuiControls.CheckBoxCreateSPNs.IsChecked
+        $documentFSMO = $Global:GuiControls.CheckBoxDocumentFSMO.IsChecked
+        
+        if (-not ($createDNS -or $createSPNs -or $documentFSMO)) {
+            Write-Log "Keine erweiterten Features ausgewählt" -Level "WARN"
+            [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens ein erweitertes Feature aus.", "Hinweis", "OK", "Warning")
+            return
+        }
+        
+        $result = [System.Windows.MessageBox]::Show(
+            "Möchten Sie folgende erweiterte Features ausführen?`n`n" +
+            "$(if ($createDNS) { '- DNS-Einträge erstellen (simuliert)`n' })" +
+            "$(if ($createSPNs) { '- Service Principal Names erstellen`n' })" +
+            "$(if ($documentFSMO) { '- FSMO-Rollen dokumentieren`n' })" +
+            "`nDies kann je nach Anzahl der Objekte einige Zeit dauern.",
+            "Erweiterte Features",
+            "YesNo",
+            "Question"
+        )
+        
+        if ($result -ne "Yes") { return }
+        
+        Show-Progress -Text "Führe erweiterte Features aus..." -Value 0
+        $successCount = 0
+        $errorCount = 0
+        $reportData = @()
+        
+        # 1. DNS-Einträge erstellen (simuliert)
+        if ($createDNS -and $Global:CreatedComputers.Count -gt 0) {
+            Update-Progress -Current 1 -Total 3 -Text "Erstelle DNS-Einträge..."
+            
+            $dnsFile = ".\DNS_Entries_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+            $dnsEntries = @()
+            $domain = (Get-ADDomain).DNSRoot
+            $ipBase = "10.0.1."
+            
+            for ($i = 0; $i -lt $Global:CreatedComputers.Count; $i++) {
+                $computer = $Global:CreatedComputers[$i]
+                $ip = "$ipBase$(100 + $i)"
+                
+                # A-Record
+                $dnsEntries += [PSCustomObject]@{
+                    RecordType = "A"
+                    Name = $computer
+                    FQDN = "$computer.$domain"
+                    Value = $ip
+                    TTL = 3600
+                    Zone = $domain
+                }
+                
+                # PTR-Record
+                $octets = $ip.Split('.')
+                $ptrName = "$($octets[3]).$($octets[2]).$($octets[1]).$($octets[0]).in-addr.arpa"
+                $dnsEntries += [PSCustomObject]@{
+                    RecordType = "PTR"
+                    Name = $ptrName
+                    FQDN = $ptrName
+                    Value = "$computer.$domain"
+                    TTL = 3600
+                    Zone = "$($octets[2]).$($octets[1]).$($octets[0]).in-addr.arpa"
+                }
+                
+                Write-Log "DNS-Einträge für '$computer' erstellt (IP: $ip)" -Level "DEBUG"
+                $successCount++
+            }
+            
+            $dnsEntries | Export-Csv -Path $dnsFile -NoTypeInformation -Encoding UTF8
+            $reportData += "DNS-Einträge: $dnsFile ($($dnsEntries.Count) Einträge)"
+        }
+        
+        # 2. Service Principal Names erstellen
+        if ($createSPNs -and $Global:CreatedServiceAccounts.Count -gt 0) {
+            Update-Progress -Current 2 -Total 3 -Text "Erstelle Service Principal Names..."
+            
+            $spnFile = ".\SPNs_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+            $spnData = @()
+            $domain = (Get-ADDomain).DNSRoot
+            
+            foreach ($serviceAccount in $Global:CreatedServiceAccounts) {
+                try {
+                    # Hole Service-Account-Details
+                    $account = Get-ADUser -Identity $serviceAccount -ErrorAction Stop
+                    
+                    # Erstelle verschiedene SPNs basierend auf Service-Typ
+                    $spns = @()
+                    
+                    # Wenn Account mit "svc-sql" beginnt
+                    if ($serviceAccount -like "svc-sql*") {
+                        $spns += "MSSQLSvc/sqlserver.$domain"
+                        $spns += "MSSQLSvc/sqlserver.$domain:1433"
+                    }
+                    # Wenn Account mit "svc-web" beginnt
+                    elseif ($serviceAccount -like "svc-web*") {
+                        $spns += "HTTP/webapp.$domain"
+                        $spns += "HTTP/webapp.$domain:80"
+                        $spns += "HTTP/webapp.$domain:443"
+                    }
+                    # Wenn Account mit "svc-" beginnt (generisch)
+                    elseif ($serviceAccount -like "svc-*") {
+                        $serviceName = $serviceAccount.Substring(4)
+                        $spns += "HOST/$serviceName.$domain"
+                    }
+                    # Standard
+                    else {
+                        $spns += "HOST/$serviceAccount.$domain"
+                    }
+                    
+                    # SPNs zum Account hinzufügen
+                    foreach ($spn in $spns) {
+                        try {
+                            Set-ADUser -Identity $serviceAccount -Add @{servicePrincipalName=$spn} -ErrorAction Stop
+                            
+                            $spnData += [PSCustomObject]@{
+                                Account = $serviceAccount
+                                SPN = $spn
+                                Status = "Created"
+                                Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                            }
+                            
+                            Write-Log "SPN '$spn' zu Service-Account '$serviceAccount' hinzugefügt" -Level "DEBUG"
+                        } catch {
+                            $spnData += [PSCustomObject]@{
+                                Account = $serviceAccount
+                                SPN = $spn
+                                Status = "Failed: $($_.Exception.Message)"
+                                Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                            }
+                            $errorCount++
+                        }
+                    }
+                    
+                    $successCount++
+                    
+                } catch {
+                    Write-Log "Fehler bei SPN-Erstellung für '$serviceAccount': $($_.Exception.Message)" -Level "ERROR"
+                    $errorCount++
+                }
+            }
+            
+            $spnData | Export-Csv -Path $spnFile -NoTypeInformation -Encoding UTF8
+            $reportData += "SPNs: $spnFile ($($spnData.Count) SPNs)"
+        }
+        
+        # 3. FSMO-Rollen dokumentieren
+        if ($documentFSMO) {
+            Update-Progress -Current 3 -Total 3 -Text "Dokumentiere FSMO-Rollen..."
+            
+            $fsmoFile = ".\FSMO_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+            
+            try {
+                $forest = Get-ADForest
+                $domain = Get-ADDomain
+                
+                $fsmoDoc = @"
+FSMO-Rollen Dokumentation
+=========================
+Erstellt am: $(Get-Date)
+
+Forest-Level FSMO-Rollen:
+- Schema Master: $($forest.SchemaMaster)
+- Domain Naming Master: $($forest.DomainNamingMaster)
+
+Domain-Level FSMO-Rollen:
+- PDC Emulator: $($domain.PDCEmulator)
+- RID Master: $($domain.RIDMaster)
+- Infrastructure Master: $($domain.InfrastructureMaster)
+
+Forest-Informationen:
+- Name: $($forest.Name)
+- Mode: $($forest.ForestMode)
+- Domains: $($forest.Domains -join ', ')
+
+Domain-Informationen:
+- Name: $($domain.Name)
+- NetBIOS: $($domain.NetBIOSName)
+- Mode: $($domain.DomainMode)
+"@
+                
+                $fsmoDoc | Out-File -FilePath $fsmoFile -Encoding UTF8
+                $reportData += "FSMO-Dokumentation: $fsmoFile"
+                $successCount++
+                
+            } catch {
+                Write-Log "Fehler bei FSMO-Dokumentation: $($_.Exception.Message)" -Level "ERROR"
+                $errorCount++
+            }
+        }
+        
+        Hide-Progress
+        
+        $message = @"
+Erweiterte Features abgeschlossen:
+
+Erfolgreiche Operationen: $successCount
+Fehler: $errorCount
+
+Erstellte Berichte:
+$(($reportData | ForEach-Object { "- $_" }) -join "`n")
+"@
+        
+        [System.Windows.MessageBox]::Show($message, "Erweiterte Features", "OK", "Information")
+        
+    } catch {
+        Hide-Progress
+        Write-Log "Fehler bei erweiterten Features: $($_.Exception.Message)" -Level "ERROR"
+        [System.Windows.MessageBox]::Show("Fehler bei der Ausführung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
+    }
+}
+
 #endregion
 
 function Show-Progress {
@@ -8023,154 +8367,3 @@ function Start-Application {
 # ============================================================================ 
 Start-Application
 
-# SIG # Begin signature block
-# MIIbywYJKoZIhvcNAQcCoIIbvDCCG7gCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAmPbTWXo8KOrTJ
-# LhvRvAynh/6kN7GsrF8143hKhZ9JJaCCFhcwggMQMIIB+KADAgECAhB3jzsyX9Cg
-# jEi+sBC2rBMTMA0GCSqGSIb3DQEBCwUAMCAxHjAcBgNVBAMMFVBoaW5JVC1QU3Nj
-# cmlwdHNfU2lnbjAeFw0yNTA3MDUwODI4MTZaFw0yNzA3MDUwODM4MTZaMCAxHjAc
-# BgNVBAMMFVBoaW5JVC1QU3NjcmlwdHNfU2lnbjCCASIwDQYJKoZIhvcNAQEBBQAD
-# ggEPADCCAQoCggEBALmz3o//iDA5MvAndTjGX7/AvzTSACClfuUR9WYK0f6Ut2dI
-# mPxn+Y9pZlLjXIpZT0H2Lvxq5aSI+aYeFtuJ8/0lULYNCVT31Bf+HxervRBKsUyi
-# W9+4PH6STxo3Pl4l56UNQMcWLPNjDORWRPWHn0f99iNtjI+L4tUC/LoWSs3obzxN
-# 3uTypzlaPBxis2qFSTR5SWqFdZdRkcuI5LNsJjyc/QWdTYRrfmVqp0QrvcxzCv8u
-# EiVuni6jkXfiE6wz+oeI3L2iR+ywmU6CUX4tPWoS9VTtmm7AhEpasRTmrrnSg20Q
-# jiBa1eH5TyLAH3TcYMxhfMbN9a2xDX5pzM65EJUCAwEAAaNGMEQwDgYDVR0PAQH/
-# BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMDMB0GA1UdDgQWBBQO7XOqiE/EYi+n
-# IaR6YO5M2MUuVTANBgkqhkiG9w0BAQsFAAOCAQEAjYOKIwBu1pfbdvEFFaR/uY88
-# peKPk0NnvNEc3dpGdOv+Fsgbz27JPvItITFd6AKMoN1W48YjQLaU22M2jdhjGN5i
-# FSobznP5KgQCDkRsuoDKiIOTiKAAknjhoBaCCEZGw8SZgKJtWzbST36Thsdd/won
-# ihLsuoLxfcFnmBfrXh3rTIvTwvfujob68s0Sf5derHP/F+nphTymlg+y4VTEAijk
-# g2dhy8RAsbS2JYZT7K5aEJpPXMiOLBqd7oTGfM7y5sLk2LIM4cT8hzgz3v5yPMkF
-# H2MdR//K403e1EKH9MsGuGAJZddVN8ppaiESoPLoXrgnw2SY5KCmhYw1xRFdjTCC
-# BY0wggR1oAMCAQICEA6bGI750C3n79tQ4ghAGFowDQYJKoZIhvcNAQEMBQAwZTEL
-# MAkGA1UEBhMCVVMxFTATBgNVBAoTDERpZ2lDZXJ0IEluYzEZMBcGA1UECxMQd3d3
-# LmRpZ2ljZXJ0LmNvbTEkMCIGA1UEAxMbRGlnaUNlcnQgQXNzdXJlZCBJRCBSb290
-# IENBMB4XDTIyMDgwMTAwMDAwMFoXDTMxMTEwOTIzNTk1OVowYjELMAkGA1UEBhMC
-# VVMxFTATBgNVBAoTDERpZ2lDZXJ0IEluYzEZMBcGA1UECxMQd3d3LmRpZ2ljZXJ0
-# LmNvbTEhMB8GA1UEAxMYRGlnaUNlcnQgVHJ1c3RlZCBSb290IEc0MIICIjANBgkq
-# hkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAv+aQc2jeu+RdSjwwIjBpM+zCpyUuySE9
-# 8orYWcLhKac9WKt2ms2uexuEDcQwH/MbpDgW61bGl20dq7J58soR0uRf1gU8Ug9S
-# H8aeFaV+vp+pVxZZVXKvaJNwwrK6dZlqczKU0RBEEC7fgvMHhOZ0O21x4i0MG+4g
-# 1ckgHWMpLc7sXk7Ik/ghYZs06wXGXuxbGrzryc/NrDRAX7F6Zu53yEioZldXn1RY
-# jgwrt0+nMNlW7sp7XeOtyU9e5TXnMcvak17cjo+A2raRmECQecN4x7axxLVqGDgD
-# EI3Y1DekLgV9iPWCPhCRcKtVgkEy19sEcypukQF8IUzUvK4bA3VdeGbZOjFEmjNA
-# vwjXWkmkwuapoGfdpCe8oU85tRFYF/ckXEaPZPfBaYh2mHY9WV1CdoeJl2l6SPDg
-# ohIbZpp0yt5LHucOY67m1O+SkjqePdwA5EUlibaaRBkrfsCUtNJhbesz2cXfSwQA
-# zH0clcOP9yGyshG3u3/y1YxwLEFgqrFjGESVGnZifvaAsPvoZKYz0YkH4b235kOk
-# GLimdwHhD5QMIR2yVCkliWzlDlJRR3S+Jqy2QXXeeqxfjT/JvNNBERJb5RBQ6zHF
-# ynIWIgnffEx1P2PsIV/EIFFrb7GrhotPwtZFX50g/KEexcCPorF+CiaZ9eRpL5gd
-# LfXZqbId5RsCAwEAAaOCATowggE2MA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYE
-# FOzX44LScV1kTN8uZz/nupiuHA9PMB8GA1UdIwQYMBaAFEXroq/0ksuCMS1Ri6en
-# IZ3zbcgPMA4GA1UdDwEB/wQEAwIBhjB5BggrBgEFBQcBAQRtMGswJAYIKwYBBQUH
-# MAGGGGh0dHA6Ly9vY3NwLmRpZ2ljZXJ0LmNvbTBDBggrBgEFBQcwAoY3aHR0cDov
-# L2NhY2VydHMuZGlnaWNlcnQuY29tL0RpZ2lDZXJ0QXNzdXJlZElEUm9vdENBLmNy
-# dDBFBgNVHR8EPjA8MDqgOKA2hjRodHRwOi8vY3JsMy5kaWdpY2VydC5jb20vRGln
-# aUNlcnRBc3N1cmVkSURSb290Q0EuY3JsMBEGA1UdIAQKMAgwBgYEVR0gADANBgkq
-# hkiG9w0BAQwFAAOCAQEAcKC/Q1xV5zhfoKN0Gz22Ftf3v1cHvZqsoYcs7IVeqRq7
-# IviHGmlUIu2kiHdtvRoU9BNKei8ttzjv9P+Aufih9/Jy3iS8UgPITtAq3votVs/5
-# 9PesMHqai7Je1M/RQ0SbQyHrlnKhSLSZy51PpwYDE3cnRNTnf+hZqPC/Lwum6fI0
-# POz3A8eHqNJMQBk1RmppVLC4oVaO7KTVPeix3P0c2PR3WlxUjG/voVA9/HYJaISf
-# b8rbII01YBwCA8sgsKxYoA5AY8WYIsGyWfVVa88nq2x2zm8jLfR+cWojayL/ErhU
-# LSd+2DrZ8LaHlv1b0VysGMNNn3O3AamfV6peKOK5lDCCBq4wggSWoAMCAQICEAc2
-# N7ckVHzYR6z9KGYqXlswDQYJKoZIhvcNAQELBQAwYjELMAkGA1UEBhMCVVMxFTAT
-# BgNVBAoTDERpZ2lDZXJ0IEluYzEZMBcGA1UECxMQd3d3LmRpZ2ljZXJ0LmNvbTEh
-# MB8GA1UEAxMYRGlnaUNlcnQgVHJ1c3RlZCBSb290IEc0MB4XDTIyMDMyMzAwMDAw
-# MFoXDTM3MDMyMjIzNTk1OVowYzELMAkGA1UEBhMCVVMxFzAVBgNVBAoTDkRpZ2lD
-# ZXJ0LCBJbmMuMTswOQYDVQQDEzJEaWdpQ2VydCBUcnVzdGVkIEc0IFJTQTQwOTYg
-# U0hBMjU2IFRpbWVTdGFtcGluZyBDQTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCC
-# AgoCggIBAMaGNQZJs8E9cklRVcclA8TykTepl1Gh1tKD0Z5Mom2gsMyD+Vr2EaFE
-# FUJfpIjzaPp985yJC3+dH54PMx9QEwsmc5Zt+FeoAn39Q7SE2hHxc7Gz7iuAhIoi
-# GN/r2j3EF3+rGSs+QtxnjupRPfDWVtTnKC3r07G1decfBmWNlCnT2exp39mQh0YA
-# e9tEQYncfGpXevA3eZ9drMvohGS0UvJ2R/dhgxndX7RUCyFobjchu0CsX7LeSn3O
-# 9TkSZ+8OpWNs5KbFHc02DVzV5huowWR0QKfAcsW6Th+xtVhNef7Xj3OTrCw54qVI
-# 1vCwMROpVymWJy71h6aPTnYVVSZwmCZ/oBpHIEPjQ2OAe3VuJyWQmDo4EbP29p7m
-# O1vsgd4iFNmCKseSv6De4z6ic/rnH1pslPJSlRErWHRAKKtzQ87fSqEcazjFKfPK
-# qpZzQmiftkaznTqj1QPgv/CiPMpC3BhIfxQ0z9JMq++bPf4OuGQq+nUoJEHtQr8F
-# nGZJUlD0UfM2SU2LINIsVzV5K6jzRWC8I41Y99xh3pP+OcD5sjClTNfpmEpYPtMD
-# iP6zj9NeS3YSUZPJjAw7W4oiqMEmCPkUEBIDfV8ju2TjY+Cm4T72wnSyPx4Jduyr
-# XUZ14mCjWAkBKAAOhFTuzuldyF4wEr1GnrXTdrnSDmuZDNIztM2xAgMBAAGjggFd
-# MIIBWTASBgNVHRMBAf8ECDAGAQH/AgEAMB0GA1UdDgQWBBS6FtltTYUvcyl2mi91
-# jGogj57IbzAfBgNVHSMEGDAWgBTs1+OC0nFdZEzfLmc/57qYrhwPTzAOBgNVHQ8B
-# Af8EBAMCAYYwEwYDVR0lBAwwCgYIKwYBBQUHAwgwdwYIKwYBBQUHAQEEazBpMCQG
-# CCsGAQUFBzABhhhodHRwOi8vb2NzcC5kaWdpY2VydC5jb20wQQYIKwYBBQUHMAKG
-# NWh0dHA6Ly9jYWNlcnRzLmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydFRydXN0ZWRSb290
-# RzQuY3J0MEMGA1UdHwQ8MDowOKA2oDSGMmh0dHA6Ly9jcmwzLmRpZ2ljZXJ0LmNv
-# bS9EaWdpQ2VydFRydXN0ZWRSb290RzQuY3JsMCAGA1UdIAQZMBcwCAYGZ4EMAQQC
-# MAsGCWCGSAGG/WwHATANBgkqhkiG9w0BAQsFAAOCAgEAfVmOwJO2b5ipRCIBfmbW
-# 2CFC4bAYLhBNE88wU86/GPvHUF3iSyn7cIoNqilp/GnBzx0H6T5gyNgL5Vxb122H
-# +oQgJTQxZ822EpZvxFBMYh0MCIKoFr2pVs8Vc40BIiXOlWk/R3f7cnQU1/+rT4os
-# equFzUNf7WC2qk+RZp4snuCKrOX9jLxkJodskr2dfNBwCnzvqLx1T7pa96kQsl3p
-# /yhUifDVinF2ZdrM8HKjI/rAJ4JErpknG6skHibBt94q6/aesXmZgaNWhqsKRcnf
-# xI2g55j7+6adcq/Ex8HBanHZxhOACcS2n82HhyS7T6NJuXdmkfFynOlLAlKnN36T
-# U6w7HQhJD5TNOXrd/yVjmScsPT9rp/Fmw0HNT7ZAmyEhQNC3EyTN3B14OuSereU0
-# cZLXJmvkOHOrpgFPvT87eK1MrfvElXvtCl8zOYdBeHo46Zzh3SP9HSjTx/no8Zhf
-# +yvYfvJGnXUsHicsJttvFXseGYs2uJPU5vIXmVnKcPA3v5gA3yAWTyf7YGcWoWa6
-# 3VXAOimGsJigK+2VQbc61RWYMbRiCQ8KvYHZE/6/pNHzV9m8BPqC3jLfBInwAM1d
-# wvnQI38AC+R2AibZ8GV2QqYphwlHK+Z/GqSFD/yYlvZVVCsfgPrA8g4r5db7qS9E
-# FUrnEw4d2zc4GqEr9u3WfPwwgga8MIIEpKADAgECAhALrma8Wrp/lYfG+ekE4zME
-# MA0GCSqGSIb3DQEBCwUAMGMxCzAJBgNVBAYTAlVTMRcwFQYDVQQKEw5EaWdpQ2Vy
-# dCwgSW5jLjE7MDkGA1UEAxMyRGlnaUNlcnQgVHJ1c3RlZCBHNCBSU0E0MDk2IFNI
-# QTI1NiBUaW1lU3RhbXBpbmcgQ0EwHhcNMjQwOTI2MDAwMDAwWhcNMzUxMTI1MjM1
-# OTU5WjBCMQswCQYDVQQGEwJVUzERMA8GA1UEChMIRGlnaUNlcnQxIDAeBgNVBAMT
-# F0RpZ2lDZXJ0IFRpbWVzdGFtcCAyMDI0MIICIjANBgkqhkiG9w0BAQEFAAOCAg8A
-# MIICCgKCAgEAvmpzn/aVIauWMLpbbeZZo7Xo/ZEfGMSIO2qZ46XB/QowIEMSvgjE
-# dEZ3v4vrrTHleW1JWGErrjOL0J4L0HqVR1czSzvUQ5xF7z4IQmn7dHY7yijvoQ7u
-# jm0u6yXF2v1CrzZopykD07/9fpAT4BxpT9vJoJqAsP8YuhRvflJ9YeHjes4fduks
-# THulntq9WelRWY++TFPxzZrbILRYynyEy7rS1lHQKFpXvo2GePfsMRhNf1F41nyE
-# g5h7iOXv+vjX0K8RhUisfqw3TTLHj1uhS66YX2LZPxS4oaf33rp9HlfqSBePejlY
-# eEdU740GKQM7SaVSH3TbBL8R6HwX9QVpGnXPlKdE4fBIn5BBFnV+KwPxRNUNK6lY
-# k2y1WSKour4hJN0SMkoaNV8hyyADiX1xuTxKaXN12HgR+8WulU2d6zhzXomJ2Ple
-# I9V2yfmfXSPGYanGgxzqI+ShoOGLomMd3mJt92nm7Mheng/TBeSA2z4I78JpwGpT
-# RHiT7yHqBiV2ngUIyCtd0pZ8zg3S7bk4QC4RrcnKJ3FbjyPAGogmoiZ33c1HG93V
-# p6lJ415ERcC7bFQMRbxqrMVANiav1k425zYyFMyLNyE1QulQSgDpW9rtvVcIH7Wv
-# G9sqYup9j8z9J1XqbBZPJ5XLln8mS8wWmdDLnBHXgYly/p1DhoQo5fkCAwEAAaOC
-# AYswggGHMA4GA1UdDwEB/wQEAwIHgDAMBgNVHRMBAf8EAjAAMBYGA1UdJQEB/wQM
-# MAoGCCsGAQUFBwMIMCAGA1UdIAQZMBcwCAYGZ4EMAQQCMAsGCWCGSAGG/WwHATAf
-# BgNVHSMEGDAWgBS6FtltTYUvcyl2mi91jGogj57IbzAdBgNVHQ4EFgQUn1csA3cO
-# KBWQZqVjXu5Pkh92oFswWgYDVR0fBFMwUTBPoE2gS4ZJaHR0cDovL2NybDMuZGln
-# aWNlcnQuY29tL0RpZ2lDZXJ0VHJ1c3RlZEc0UlNBNDA5NlNIQTI1NlRpbWVTdGFt
-# cGluZ0NBLmNybDCBkAYIKwYBBQUHAQEEgYMwgYAwJAYIKwYBBQUHMAGGGGh0dHA6
-# Ly9vY3NwLmRpZ2ljZXJ0LmNvbTBYBggrBgEFBQcwAoZMaHR0cDovL2NhY2VydHMu
-# ZGlnaWNlcnQuY29tL0RpZ2lDZXJ0VHJ1c3RlZEc0UlNBNDA5NlNIQTI1NlRpbWVT
-# dGFtcGluZ0NBLmNydDANBgkqhkiG9w0BAQsFAAOCAgEAPa0eH3aZW+M4hBJH2UOR
-# 9hHbm04IHdEoT8/T3HuBSyZeq3jSi5GXeWP7xCKhVireKCnCs+8GZl2uVYFvQe+p
-# PTScVJeCZSsMo1JCoZN2mMew/L4tpqVNbSpWO9QGFwfMEy60HofN6V51sMLMXNTL
-# fhVqs+e8haupWiArSozyAmGH/6oMQAh078qRh6wvJNU6gnh5OruCP1QUAvVSu4kq
-# VOcJVozZR5RRb/zPd++PGE3qF1P3xWvYViUJLsxtvge/mzA75oBfFZSbdakHJe2B
-# VDGIGVNVjOp8sNt70+kEoMF+T6tptMUNlehSR7vM+C13v9+9ZOUKzfRUAYSyyEmY
-# tsnpltD/GWX8eM70ls1V6QG/ZOB6b6Yum1HvIiulqJ1Elesj5TMHq8CWT/xrW7tw
-# ipXTJ5/i5pkU5E16RSBAdOp12aw8IQhhA/vEbFkEiF2abhuFixUDobZaA0VhqAsM
-# HOmaT3XThZDNi5U2zHKhUs5uHHdG6BoQau75KiNbh0c+hatSF+02kULkftARjsyE
-# pHKsF7u5zKRbt5oK5YGwFvgc4pEVUNytmB3BpIiowOIIuDgP5M9WArHYSAR16gc0
-# dP2XdkMEP5eBsX7bf/MGN4K3HP50v/01ZHo/Z5lGLvNwQ7XHBx1yomzLP8lx4Q1z
-# ZKDyHcp4VQJLu2kWTsKsOqQxggUKMIIFBgIBATA0MCAxHjAcBgNVBAMMFVBoaW5J
-# VC1QU3NjcmlwdHNfU2lnbgIQd487Ml/QoIxIvrAQtqwTEzANBglghkgBZQMEAgEF
-# AKCBhDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgor
-# BgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3
-# DQEJBDEiBCAD3yiXCpWVJf/LzMVsBfcug9iBX2YZHUW3XmejPjaoIzANBgkqhkiG
-# 9w0BAQEFAASCAQCU6PuUwMk4tGPUBoGlAC3A6TnunbiAtH3tWionnea+l50CSXDK
-# 3hCbodXxBJHBp5FL5gx1ZUiZmd0TH41Y+Okfq8SAGScDv/+uvzEI+7fnfNqDxNk9
-# 0rlcOhrYHC+pT0Xj+mYxfDr3c3gy3TOQmHapXaBEeJ2ItfZbl/hpErwbdQ/6ySnp
-# P5p6AWR4+SXnfSzREZwRRaDnX77HJAR3NswMM7oPuCwpqyfTJI85KOa9c2KYBZLB
-# kq6RBGn4Fz8GtFAwb4YITsWmfpZkcOsQLq4L1Chj8jqMr0ON6FAU5/pWny/UOGCa
-# 7K6gO44DBTeC7rqeoan+kM9JDzKVXqJc6S6UoYIDIDCCAxwGCSqGSIb3DQEJBjGC
-# Aw0wggMJAgEBMHcwYzELMAkGA1UEBhMCVVMxFzAVBgNVBAoTDkRpZ2lDZXJ0LCBJ
-# bmMuMTswOQYDVQQDEzJEaWdpQ2VydCBUcnVzdGVkIEc0IFJTQTQwOTYgU0hBMjU2
-# IFRpbWVTdGFtcGluZyBDQQIQC65mvFq6f5WHxvnpBOMzBDANBglghkgBZQMEAgEF
-# AKBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkFMQ8XDTI1
-# MDcwNTEwMTIwOFowLwYJKoZIhvcNAQkEMSIEINsKp4SPFfq5CDBNE3hrEjR9HKOs
-# j785qXAwLHBV3cwHMA0GCSqGSIb3DQEBAQUABIICALzyATtuKBImCETF6iWyb2TV
-# l5mlDhc8eKO6VkWDY44irlTLRg1+h4Z+XQz7cjYYYo511cclxAp1LzUor//Pffat
-# PiWeeOZgm6sQVLYaarNmVhC20bU41w753mWpNEiAOop3a7paVhUCyYSKiqO8tTJw
-# TSDkrnsj0B7SHz9ZWG3GPVH3jdYq57VafY7S1x+eHU2632DubYjnl3PxfCFyga70
-# 6L5lv7YHYJ5YGryMqLhGbK8wBcK4rzG+P3Xf/cUV1h+rxkYmYJXQJv/aggj/vDCg
-# jKUp9Je2XsqmkJaFv908wNtd6+m8C22P+3vTDRrURg+6d0/gKyv86/BQ3ehIhKVy
-# z6dgHboOvbNsslAGU+rEeTzfBOfp2AiBFmW/ZT4eRK4crp32NKZstAfL0xPJWbCv
-# 0tufBOSxwMoJNUifdBKuYV03m9GAO1YegCotZMeumzKE9kqR519i7tHD009wb0Im
-# AJYrWW6w7K+DmhqFmuRGRnY5jk9v86NjSXa2B6Oc0uBI1MrwyUw/p03CYRQwKEXn
-# /WXn5yBXM2a1PqZZ7Nvr6n1WSYMnCwHddZZlbyV+5fF6JX62d5ePUuv4GizweCL9
-# SjjLYKAcWpVhupTxdRv9Q1tD9YQ64HH8c8HtyWY2Uk5x/rA1AmE3SykK1EWtXhGQ
-# 6K1Ahv2T6zCNao5Rv0aQ
-# SIG # End signature block

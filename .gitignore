@@ -1,8 +1,19 @@
-/easyPSInfo/Logs
-/easyPSInfo/Logs
-easyADReport/ComingFeatures.md
-Dummy Active Directoy/easyADDummyUserCreator_backup.ps1
-*.csv
+# Laufzeit-Logs und Exporte der Tools (koennen interne Pfade, Hostnamen und Benutzerdaten enthalten)
+Logs/
 *.log
 *.txt
-Dummy Active Directoy/easyADDummyUserCreator.log
+*.csv
+!easyADDummyUserCreator/AD_DummyUserList.csv
+
+# Lokale Backups / Arbeitskopien
+*_backup.ps1
+*.bak
+
+# Archiv-Ordner alter Versionen (aeltere Versionen sind ueber die Git-Historie verfuegbar)
+\#*/
+
+# Betriebssystem / Editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
