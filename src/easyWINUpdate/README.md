@@ -1,9 +1,9 @@
-# easyWINUpdate v0.2.4 – Windows Update Management Tool
+# easyWINUpdate v0.2.5 – Windows Update Management Tool
 
-WPF-Oberfläche zur Verwaltung von Windows Updates, WSUS-Einstellungen und zur Fehlersuche.
+Deutschsprachige WPF-Oberfläche zur Verwaltung von Windows Updates, WSUS-Einstellungen und zur Fehlersuche.
 
 - **Changelog:** [CHANGELOG.md](../../CHANGELOG.md)
-- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easywinupdate-023--024)
+- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easywinupdate-024--025)
 - **Screenshots:** [assets/screenshots/easyWINUpdate](../../assets/screenshots/easyWINUpdate/)
 
 ## Funktionen
@@ -14,9 +14,18 @@ WPF-Oberfläche zur Verwaltung von Windows Updates, WSUS-Einstellungen und zur F
 | Updates | Installierte Updates anzeigen/exportieren/deinstallieren, verfügbare Updates suchen (Windows-Update-API), installieren und herunterladen |
 | WSUS | Manuelle Konfiguration (Server/Port geprüft), GPO-Werte, Zielgruppe, Synchronisierung inkl. Verlauf (Ereignisse 25/26), Verbindungstest (TCP), Reset (nur WSUS-Werte) |
 | Zeitplan | Geplante Aufgabe über die Task-Scheduler-COM-Schnittstelle (Skript in `%ProgramFiles%\PhinIT\easyWINUpdate`, nur SYSTEM/Administratoren) |
-| Troubleshooting | Fehlercode-Datenbank mit Lösungen, BITS/WaaSMedic, Registry-/Datenbank-Reparatur, DLL-Registrierung, DISM/SFC/CHKDSK (eigenes Konsolenfenster), Log-Analyse, Debug-Modus, Auto-Fix, Temp bereinigen, Winsock-Reset |
+| Fehlerbehebung | Fehlercode-Datenbank mit Lösungen, BITS/WaaSMedic, Registry-/Datenbank-Reparatur, DLL-Registrierung, DISM/SFC/CHKDSK (eigenes Konsolenfenster), Log-Analyse, Debug-Modus, Auto-Fix, Temp bereinigen, Winsock-Reset |
 
-Lang laufende Aktionen (Suche, Installation, Download, Deinstallation, Log-Analyse) laufen im Hintergrund – die Oberfläche bleibt bedienbar.
+Lang laufende Aktionen laufen im Hintergrund – die Oberfläche bleibt bedienbar:
+
+- Suche, Installation, Download und Deinstallation von Updates
+- alle Reparaturen und Fehlerbehebungen: Auto-Fix, Komponenten-Reset, Registry-/Datenbank-Reparatur, BITS/WaaSMedic, DLL-Registrierung,
+  hängende Updates, Update-Verlauf löschen, Temp bereinigen, Winsock-Reset, Fehlerdiagnose, Log-Analyse, Debug-Modus, Wiederherstellungspunkt
+- WSUS-Reset, manuelle WSUS-Konfiguration, Richtlinien/Sync-Einstellungen übernehmen, WSUS-Verbindungstest
+
+Während einer Reparatur zeigt die Fehlerbehebungsseite den aktuellen Schritt und einen Fortschrittsbalken an; die Reparatur-Buttons
+sind gesperrt. Es läuft immer nur eine Aktion gleichzeitig (keine Update-Suche/-Installation während einer Reparatur und umgekehrt).
+Beim Schließen des Fensters während einer Reparatur erscheint eine Warnung. DISM/SFC/CHKDSK öffnen ein eigenes Konsolenfenster.
 
 ## Voraussetzungen
 
@@ -53,9 +62,10 @@ Parameter: keine.
 
 ## Bekannte Einschränkungen
 
-- Auto-Fix, Komponenten-Reset und Registry-/Datenbank-Reparatur laufen weiterhin synchron (die GUI ist währenddessen blockiert).
+- Kurz synchron: `Get-HotFix` auf der Startseite, das Laden der WSUS-Seite (Verbindungstest bis 3 s) und die Installation von `PSWindowsUpdate`
+  für alle Benutzer beim Anlegen des Zeitplans.
 - WSUS-Zielgruppen sind eine feste Auswahlliste (echte Gruppen erfordern die WSUS-Admin-Konsole).
-- Intervalle „Weekly/Monthly“ werden auf das Richtlinien-Maximum von 22 Stunden (`DetectionFrequency`) abgebildet.
+- Intervalle „Wöchentlich/Monatlich“ werden auf das Richtlinien-Maximum von 22 Stunden (`DetectionFrequency`) abgebildet.
 - `PSWindowsUpdate` wird bei Bedarf automatisch aus der PowerShell Gallery installiert.
 
 ## Lizenz

@@ -3,12 +3,14 @@
     easyPSInfo - PowerShell Module & Policy Manager mit Script Launcher (WPF-GUI).
 .DESCRIPTION
     Zeigt den Status wichtiger Microsoft-365-/Azure-PowerShell-Module, installiert/aktualisiert diese
-    (PSGallery, Scope CurrentUser), zeigt und setzt ExecutionPolicies und startet PowerShell-Skripte
-    aus dem Skriptordner und dessen Unterordnern.
+    (PSGallery, Scope CurrentUser), zeigt und setzt ExecutionPolicies und startet PowerShell-Skripte.
+    Der Script-Launcher durchsucht standardmäßig den Repository-Ordner "src" (alle Tools), wenn das Tool
+    unter src\<Tool>\<Tool>.ps1 liegt, sonst den eigenen Skriptordner; ein anderer Basisordner kann in der
+    GUI gewählt werden (gespeichert in %APPDATA%\PhinIT\easyPSInfo\settings.json).
 .NOTES
     Tool:    easyPSInfo
-    Version: 0.0.4
-    Autor:   Andreas Hepp | PhinIT
+    Version: 0.0.5
+    Autor:   Andreas Hepp | PhinIT (www.phinit.de)
     Web:     www.phinit.de
 #>
 
@@ -23,8 +25,25 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
 
 $script:AppName    = "easyPSInfo"
-$script:AppVersion = "0.0.4"
-$script:WindowTitle = "PhinIT | easyPSInfo - PowerShell Module & Policy Manager - with Script Launcher"
+$script:AppVersion = "0.0.5"
+$script:WindowTitle = "PhinIT | easyPSInfo - PowerShell-Modul- & Richtlinien-Manager mit Script-Launcher"
+
+# GUI-Elemente (werden in Import-XamlGui im Skript-Scope gesetzt)
+$script:window              = $null
+$script:txtLog              = $null
+$script:lvModules           = $null
+$script:lvExecutionPolicies = $null
+$script:guiElementNames     = @()
+
+# Script-Launcher: Basisordner, Suchtiefe, Ausschlüsse, Einstellungen
+$script:ScriptSearchBase         = $null
+$script:ScriptSearchBaseIsCustom = $false
+$script:MaxScriptSearchDepth     = 5
+$script:MaxScriptSearchFolders   = 2000
+$script:ExcludedFolderNames      = @("Logs", "Exports", "Backups")
+$script:ExcludedFolderPatterns   = @("*old*", "*#old*", "*# old*")
+$script:SettingsFolder = if ($env:APPDATA) { Join-Path -Path $env:APPDATA -ChildPath "PhinIT\easyPSInfo" } else { $null }
+$script:SettingsFile   = if ($script:SettingsFolder) { Join-Path -Path $script:SettingsFolder -ChildPath "settings.json" } else { $null }
 
 # Skriptpfad/-ordner robust ermitteln (auch bei leerem $PSScriptRoot, z.B. Ausführung einer Auswahl in der ISE)
 $script:ScriptPath = $null
@@ -64,14 +83,25 @@ catch {
 }
 $script:logFile = Join-Path -Path $script:logFolder -ChildPath "easyPSInfo.log"
 
-# Entfernt interne Pfade (UNC-Server/Freigaben, Skriptordner, Benutzerprofil) aus Log-Einträgen
+# Entfernt interne Pfade (UNC-Server/Freigaben, Skriptordner, Suchbasis, Benutzerprofil) aus Log-Einträgen
 function ConvertTo-SafeLogText {
+    [OutputType([string])]
     param ([string]$Text)
     if ([string]::IsNullOrEmpty($Text)) { return $Text }
     $safeText = $Text
-    $rootToMask = if ($script:ScriptRoot) { $script:ScriptRoot.TrimEnd('\', '/') } else { $null }
-    if ($rootToMask -and $rootToMask.Length -gt 3) {
-        $safeText = [regex]::Replace($safeText, [regex]::Escape($rootToMask), '<ScriptRoot>', 'IgnoreCase')
+
+    # Längere Pfade zuerst maskieren (Suchbasis kann über- oder untergeordnet zum Skriptordner sein)
+    $masks = New-Object System.Collections.Generic.List[object]
+    if ($script:ScriptRoot) {
+        $masks.Add([PSCustomObject]@{ Path = $script:ScriptRoot.TrimEnd('\', '/'); Token = '<ScriptRoot>' })
+    }
+    if ($script:ScriptSearchBase) {
+        $masks.Add([PSCustomObject]@{ Path = $script:ScriptSearchBase.TrimEnd('\', '/'); Token = '<ScriptBase>' })
+    }
+    foreach ($mask in ($masks | Sort-Object -Property { $_.Path.Length } -Descending)) {
+        if ($mask.Path -and $mask.Path.Length -gt 3) {
+            $safeText = [regex]::Replace($safeText, [regex]::Escape($mask.Path), $mask.Token, 'IgnoreCase')
+        }
     }
     if ($env:USERPROFILE) {
         $safeText = [regex]::Replace($safeText, [regex]::Escape($env:USERPROFILE), '%USERPROFILE%', 'IgnoreCase')
@@ -80,8 +110,8 @@ function ConvertTo-SafeLogText {
     return $safeText
 }
 
-# Zentrale Logging-Funktion
-function Write-Log {
+# Zentrale Logging-Funktion (Datei + Verbose/Warning-Stream; die GUI-Anzeige übernimmt Write-GuiLog)
+function Write-AppLog {
     param (
         [string]$Message,
         [ValidateSet("Info", "Warning", "Error", "Success")]
@@ -96,36 +126,36 @@ function Write-Log {
         Write-Verbose "Log-Datei konnte nicht geschrieben werden: $($_.Exception.Message)"
     }
 
-    switch ($Type) {
-        "Info"    { Write-Host $logEntry -ForegroundColor Gray }
-        "Warning" { Write-Host $logEntry -ForegroundColor Yellow }
-        "Error"   { Write-Host $logEntry -ForegroundColor Red }
-        "Success" { Write-Host $logEntry -ForegroundColor Green }
+    if ($Type -in @("Warning", "Error")) {
+        Write-Warning $logEntry
+    }
+    else {
+        Write-Verbose $logEntry
     }
 }
 
-# Konsolidierte Funktion zur Aktualisierung der Log-Anzeige in der GUI
-function Update-LogDisplay {
+# Konsolidierte Funktion zur Ausgabe in der Log-Anzeige der GUI (und in der Log-Datei)
+function Write-GuiLog {
     param (
         [string]$Message,
         [ValidateSet("Info", "Warning", "Error", "Success")]
         [string]$Type = "Info"
     )
-    Write-Log -Message $Message -Type $Type
+    Write-AppLog -Message $Message -Type $Type
 
     $timestamp = Get-Date -Format "HH:mm:ss"
     $logEntry = "[$timestamp] "
     switch ($Type) {
         "Info"    { $logEntry += "[INFO] " }
-        "Warning" { $logEntry += "[WARNING] " }
-        "Error"   { $logEntry += "[ERROR] " }
-        "Success" { $logEntry += "[SUCCESS] " }
+        "Warning" { $logEntry += "[WARNUNG] " }
+        "Error"   { $logEntry += "[FEHLER] " }
+        "Success" { $logEntry += "[OK] " }
     }
     $logEntry += $Message
 
-    if ($Global:txtLog) {
-        $Global:txtLog.AppendText("$logEntry`n")
-        $Global:txtLog.ScrollToEnd()
+    if ($script:txtLog) {
+        $script:txtLog.AppendText("$logEntry`n")
+        $script:txtLog.ScrollToEnd()
     }
 }
 
@@ -134,7 +164,7 @@ $requiredModules = @(
     @{
         Name         = "ExchangeOnlineManagement"
         MinVersion   = "3.8.0"
-        Description  = "Exchange Online Verwaltung"
+        Description  = "Exchange-Online-Verwaltung"
         Webseite     = "https://www.powershellgallery.com/packages/ExchangeOnlineManagement/"
         Install      = "Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser"
     },
@@ -148,7 +178,7 @@ $requiredModules = @(
     @{
         Name         = "PowerShellGet"
         MinVersion   = "2.2.5"
-        Description  = "PS Module Management"
+        Description  = "PowerShell-Modulverwaltung"
         Webseite     = "https://www.powershellgallery.com/packages/PowerShellGet/"
         Install      = "Install-Module -Name PowerShellGet -Scope CurrentUser"
     },
@@ -183,16 +213,18 @@ $requiredModules = @(
     @{
         Name         = "AzureAD"
         MinVersion   = "2.0.2.182"
-        Description  = "Azure AD (legacy)"
+        Description  = "Azure AD (Legacy) - von Microsoft abgekündigt, Nachfolger: Microsoft.Graph / Microsoft.Entra"
         Webseite     = "https://www.powershellgallery.com/packages/AzureAD/"
         Install      = "Install-Module -Name AzureAD -Scope CurrentUser"
+        Deprecated   = $true
     },
     @{
         Name         = "MSOnline"
         MinVersion   = "1.1.183.81"
-        Description  = "Azure AD V1 (legacy)"
+        Description  = "Azure AD V1 (Legacy) - von Microsoft abgekündigt, Nachfolger: Microsoft.Graph / Microsoft.Entra"
         Webseite     = "https://www.powershellgallery.com/packages/MSOnline/"
         Install      = "Install-Module -Name MSOnline -Scope CurrentUser"
+        Deprecated   = $true
     },
     @{
         Name         = "Microsoft.Online.SharePoint.PowerShell"
@@ -206,6 +238,8 @@ $requiredModules = @(
 # Installationslogik (läuft in einem eigenen Runspace, damit die GUI nicht blockiert).
 # Gibt Objekte mit Type/Message zurück; das letzte Objekt hat Type "Result" und Success.
 # PSGallery wird NICHT dauerhaft als vertrauenswürdig eingetragen; die Bestätigung erfolgt in der GUI.
+# Hinweis: Der Scriptblock wird als Text in einen eigenen Runspace übergeben - dort gibt es weder
+# $script:-Variablen noch Funktionen dieses Skripts; alle Daten kommen über Parameter.
 $script:InstallModuleScript = {
     param (
         [string]$ModuleName,
@@ -217,10 +251,10 @@ $script:InstallModuleScript = {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         }
         catch {
-            [PSCustomObject]@{ Type = "Warning"; Message = "TLS 1.2 could not be enabled: $($_.Exception.Message)" }
+            [PSCustomObject]@{ Type = "Warning"; Message = "TLS 1.2 konnte nicht aktiviert werden: $($_.Exception.Message)" }
         }
         if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
-            [PSCustomObject]@{ Type = "Info"; Message = "Installing NuGet Provider..." }
+            [PSCustomObject]@{ Type = "Info"; Message = "NuGet-Provider wird installiert..." }
             Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -ErrorAction Stop | Out-Null
         }
         $installParams = @{
@@ -233,84 +267,95 @@ $script:InstallModuleScript = {
         }
         if (-not [string]::IsNullOrEmpty($MinVersion)) {
             $installParams.MinimumVersion = $MinVersion
-            [PSCustomObject]@{ Type = "Info"; Message = "Installing $ModuleName (minimum version $MinVersion) from PSGallery..." }
+            [PSCustomObject]@{ Type = "Info"; Message = "$ModuleName (Mindestversion $MinVersion) wird aus der PSGallery installiert..." }
         }
         else {
-            [PSCustomObject]@{ Type = "Info"; Message = "Installing $ModuleName from PSGallery..." }
+            [PSCustomObject]@{ Type = "Info"; Message = "$ModuleName wird aus der PSGallery installiert..." }
         }
         Install-Module @installParams
-        [PSCustomObject]@{ Type = "Result"; Success = $true; Message = "Module $ModuleName successfully installed." }
+        [PSCustomObject]@{ Type = "Result"; Success = $true; Message = "Modul $ModuleName erfolgreich installiert." }
     }
     catch {
-        [PSCustomObject]@{ Type = "Result"; Success = $false; Message = "Error installing $ModuleName - $($_.Exception.Message)" }
+        [PSCustomObject]@{ Type = "Result"; Success = $false; Message = "Fehler bei der Installation von $ModuleName - $($_.Exception.Message)" }
     }
 }
 
 # Funktion zur Ermittlung von Moduldaten (ein einziger Get-Module -ListAvailable-Aufruf für alle Module)
 function Get-ModuleData {
-    $moduleData = @()
+    $moduleData = New-Object System.Collections.Generic.List[object]
     $moduleNames = @($requiredModules | ForEach-Object { $_.Name })
     $availableModules = @(Get-Module -ListAvailable -Name $moduleNames -ErrorAction SilentlyContinue)
 
     foreach ($module in $requiredModules) {
         $moduleName    = $module.Name
         $minVersion    = $module.MinVersion
-        $description   = $module.Description
-        $webseite      = $module.Webseite
-        $installCmd    = $module.Install
+        $deprecated    = [bool]$module.Deprecated
 
         $installedModule = $availableModules | Where-Object { $_.Name -eq $moduleName } | Sort-Object Version -Descending | Select-Object -First 1
-        $installedVersion = if ($installedModule) { $installedModule.Version.ToString() } else { "Not installed" }
+        $installedVersion = if ($installedModule) { $installedModule.Version.ToString() } else { "Nicht installiert" }
         $installed = [bool]$installedModule
         if ($installed -and $minVersion) {
             $installed = ($installedModule.Version -ge [version]$minVersion)
         }
-        
-        $installEnabled = -not $installed
-        
-        $moduleData += [PSCustomObject]@{
+
+        $status = if (-not $installedModule) { "Fehlt" } elseif ($installed) { "OK" } else { "Veraltet" }
+        $toolTip = $module.Description
+        if ($deprecated) {
+            $status  = "Abgekündigt"
+            $toolTip = "$($module.Description). Nur noch für Altskripte verwenden."
+        }
+
+        $moduleData.Add([PSCustomObject]@{
             Name             = $moduleName
-            Description      = $description
+            DisplayName      = if ($deprecated) { "$moduleName (abgekündigt)" } else { $moduleName }
+            Description      = $module.Description
+            ToolTip          = $toolTip
+            Deprecated       = $deprecated
+            Status           = $status
             MinVersion       = $minVersion
             InstalledVersion = $installedVersion
-            InstallEnabled   = $installEnabled
-            Webseite         = $webseite
-            InstallCmd       = $installCmd
-        }
+            InstallEnabled   = -not $installed
+            Webseite         = $module.Webseite
+            InstallCmd       = $module.Install
+        })
     }
-    return $moduleData
+    return $moduleData.ToArray()
 }
 
-# Funktion zur Aktualisierung der Module
-function Check-AllModules {
-    Update-LogDisplay -Message "Checking modules..." -Type "Info"
-    $moduleData = Get-ModuleData
-    if ($Global:lvModules) {
-        $Global:lvModules.ItemsSource = $moduleData
-        Update-LogDisplay -Message "Modules loaded in ListView." -Type "Info"
+# Funktion zur Anzeige des Modulstatus in der ListView
+function Show-ModuleStatus {
+    Write-GuiLog -Message "Module werden geprüft..." -Type "Info"
+    $moduleData = @(Get-ModuleData)
+    if ($script:lvModules) {
+        $script:lvModules.ItemsSource = $moduleData
+        Write-GuiLog -Message "Modulliste aktualisiert." -Type "Info"
+        $installedDeprecated = @($moduleData | Where-Object { $_.Deprecated -and $_.InstalledVersion -ne "Nicht installiert" } | ForEach-Object { $_.Name })
+        if ($installedDeprecated.Count -gt 0) {
+            Write-GuiLog -Message "Hinweis: $($installedDeprecated -join ', ') von Microsoft abgekündigt - bitte auf Microsoft.Graph bzw. Microsoft.Entra umstellen." -Type "Warning"
+        }
     }
     else {
-        Update-LogDisplay -Message "ListView element not found!" -Type "Error"
+        Write-GuiLog -Message "ListView-Element für Module nicht gefunden!" -Type "Error"
     }
 }
 
 # ExecutionPolicy-Funktionen
-function Get-CurrentExecutionPolicies {
+function Get-CurrentExecutionPolicy {
     $policies = Get-ExecutionPolicy -List | Select-Object Scope, ExecutionPolicy
     $policyData = @()
-    
+
     $scopeDescriptions = @{
-        "MachinePolicy" = "MachinePolicy (GPO - All users of this computer)"
-        "UserPolicy"    = "UserPolicy (GPO - Current user)"
-        "Process"       = "Process (Only for current PowerShell session)"
-        "CurrentUser"   = "CurrentUser (Settings for current user)"
-        "LocalMachine"  = "LocalMachine (Default for all users of this computer)"
+        "MachinePolicy" = "MachinePolicy (GPO - alle Benutzer dieses Computers)"
+        "UserPolicy"    = "UserPolicy (GPO - aktueller Benutzer)"
+        "Process"       = "Process (nur aktuelle PowerShell-Sitzung)"
+        "CurrentUser"   = "CurrentUser (Einstellung des aktuellen Benutzers)"
+        "LocalMachine"  = "LocalMachine (Standard für alle Benutzer dieses Computers)"
     }
-    
+
     foreach ($policy in $policies) {
         $scopeName = $policy.Scope.ToString()
         $canModify = $scopeName -notin @("MachinePolicy", "UserPolicy")
-        
+
         $policyData += [PSCustomObject]@{
             Scope = $scopeName
             Description = $scopeDescriptions[$scopeName]
@@ -319,59 +364,65 @@ function Get-CurrentExecutionPolicies {
             PolicyOptions = @("Restricted", "AllSigned", "RemoteSigned", "Unrestricted", "Bypass", "Undefined")
         }
     }
-    
-    # Add effective policy
+
+    # Effektive Richtlinie ergänzen
     try {
         $effectivePolicy = Get-ExecutionPolicy
         $policyData += [PSCustomObject]@{
             Scope = "Effective"
-            Description = "Effective Policy (current session)"
+            Description = "Effektive Richtlinie (aktuelle Sitzung)"
             CurrentPolicy = $effectivePolicy.ToString()
             CanModify = $false
             PolicyOptions = @()
         }
     }
     catch {
-        Update-LogDisplay -Message "Error getting effective policy: $($_.Exception.Message)" -Type "Warning"
+        Write-GuiLog -Message "Fehler beim Ermitteln der effektiven Richtlinie: $($_.Exception.Message)" -Type "Warning"
     }
-    
+
     return $policyData
 }
 
-function Update-ExecutionPolicyDisplay {
-    $policyData = Get-CurrentExecutionPolicies
-    if ($Global:lvExecutionPolicies) {
-        $Global:lvExecutionPolicies.ItemsSource = $policyData
-        Update-LogDisplay -Message "Execution policies updated." -Type "Info"
+function Show-ExecutionPolicy {
+    $policyData = Get-CurrentExecutionPolicy
+    if ($script:lvExecutionPolicies) {
+        $script:lvExecutionPolicies.ItemsSource = $policyData
+        Write-GuiLog -Message "Ausführungsrichtlinien aktualisiert." -Type "Info"
     }
 }
 
 function Set-ExecutionPolicyHandler {
-    param($scope, $policy)
-    
-    # Check for admin rights if needed
-    if ($scope -eq "LocalMachine") {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$Scope,
+        [string]$Policy
+    )
+
+    # Bei Bedarf Administratorrechte prüfen
+    if ($Scope -eq "LocalMachine") {
         if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             $result = [System.Windows.MessageBox]::Show(
-                "Admin rights are required to modify LocalMachine scope. Restart as administrator?",
-                "Admin Rights Required",
+                "Zum Ändern des Scopes LocalMachine sind Administratorrechte erforderlich. Als Administrator neu starten?",
+                "Administratorrechte erforderlich",
                 [System.Windows.MessageBoxButton]::YesNo,
                 [System.Windows.MessageBoxImage]::Warning)
-            
+
             if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
                 if ([string]::IsNullOrEmpty($script:ScriptPath) -or -not (Test-Path -LiteralPath $script:ScriptPath)) {
-                    Update-LogDisplay -Message "Restart as administrator not possible: script path unknown (script was not started from a file)." -Type "Error"
+                    Write-GuiLog -Message "Neustart als Administrator nicht möglich: Skriptpfad unbekannt (Skript wurde nicht aus einer Datei gestartet)." -Type "Error"
                     return
                 }
                 try {
                     # Gleiche PowerShell-Edition neu starten (powershell.exe bzw. pwsh.exe, nie powershell_ise.exe)
                     $hostExe = if ($PSVersionTable.PSEdition -eq "Core") { Join-Path -Path $PSHOME -ChildPath "pwsh.exe" } else { Join-Path -Path $PSHOME -ChildPath "powershell.exe" }
                     $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File `"$($script:ScriptPath)`""
-                    Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $argumentLine -ErrorAction Stop
-                    $Global:window.Close()
+                    if ($PSCmdlet.ShouldProcess($script:AppName, "Als Administrator neu starten")) {
+                        Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $argumentLine -ErrorAction Stop
+                        $script:window.Close()
+                    }
                 }
                 catch {
-                    Update-LogDisplay -Message "Error restarting as admin: $($_.Exception.Message)" -Type "Error"
+                    Write-GuiLog -Message "Fehler beim Neustart als Administrator: $($_.Exception.Message)" -Type "Error"
                 }
             }
             return
@@ -379,46 +430,48 @@ function Set-ExecutionPolicyHandler {
     }
 
     # Sicherheitsabfrage bei dauerhaft wirkenden, unsicheren Richtlinien
-    if ($scope -in @("CurrentUser", "LocalMachine") -and $policy -in @("Unrestricted", "Bypass")) {
+    if ($Scope -in @("CurrentUser", "LocalMachine") -and $Policy -in @("Unrestricted", "Bypass")) {
         $confirm = [System.Windows.MessageBox]::Show(
-            "Setting the ExecutionPolicy '$policy' for scope '$scope' is persistent and reduces script security.`n`nContinue?",
-            "Confirm ExecutionPolicy",
+            "Die ExecutionPolicy '$Policy' für den Scope '$Scope' wirkt dauerhaft und verringert die Skriptsicherheit.`n`nFortfahren?",
+            "ExecutionPolicy bestätigen",
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Warning)
         if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
-            Update-LogDisplay -Message "Change of ExecutionPolicy for scope '$scope' to '$policy' cancelled by user." -Type "Info"
+            Write-GuiLog -Message "Änderung der ExecutionPolicy für den Scope '$Scope' auf '$Policy' vom Benutzer abgebrochen." -Type "Info"
             return
         }
     }
-    
+
     try {
-        Update-LogDisplay -Message "Setting ExecutionPolicy for scope '$scope' to '$policy'..." -Type "Info"
-        Set-ExecutionPolicy -ExecutionPolicy $policy -Scope $scope -Force -ErrorAction Stop
-        Update-LogDisplay -Message "ExecutionPolicy successfully set for scope '$scope'." -Type "Success"
+        if ($PSCmdlet.ShouldProcess("Scope $Scope", "ExecutionPolicy auf '$Policy' setzen")) {
+            Write-GuiLog -Message "ExecutionPolicy für den Scope '$Scope' wird auf '$Policy' gesetzt..." -Type "Info"
+            Set-ExecutionPolicy -ExecutionPolicy $Policy -Scope $Scope -Force -ErrorAction Stop
+            Write-GuiLog -Message "ExecutionPolicy für den Scope '$Scope' erfolgreich gesetzt." -Type "Success"
+        }
     }
     catch [System.Security.SecurityException] {
         # Wird geworfen, wenn die Einstellung gespeichert wurde, aber durch einen spezifischeren Scope überschrieben wird
-        Update-LogDisplay -Message "ExecutionPolicy for scope '$scope' was set, but is overridden by a more specific scope: $($_.Exception.Message)" -Type "Warning"
+        Write-GuiLog -Message "ExecutionPolicy für den Scope '$Scope' wurde gesetzt, wird aber durch einen spezifischeren Scope überschrieben: $($_.Exception.Message)" -Type "Warning"
     }
     catch {
-        Update-LogDisplay -Message "Error setting ExecutionPolicy for scope '$scope': $($_.Exception.Message)" -Type "Error"
+        Write-GuiLog -Message "Fehler beim Setzen der ExecutionPolicy für den Scope '$Scope': $($_.Exception.Message)" -Type "Error"
     }
-    Update-ExecutionPolicyDisplay
+    Show-ExecutionPolicy
 }
 
-# Funktion zum Öffnen von Web Links (nur http/https)
+# Funktion zum Öffnen von Weblinks (nur http/https)
 function Open-WebLink {
     param($url)
     try {
         if (-not [string]::IsNullOrEmpty($url) -and $url -match '^https?://') {
             Start-Process -FilePath $url
-            Update-LogDisplay -Message "Opening web link: $url" -Type "Info"
+            Write-GuiLog -Message "Weblink wird geöffnet: $url" -Type "Info"
         } else {
-            Update-LogDisplay -Message "No valid web link available for this module." -Type "Warning"
+            Write-GuiLog -Message "Für dieses Modul ist kein gültiger Weblink hinterlegt." -Type "Warning"
         }
     }
     catch {
-        Update-LogDisplay -Message "Error opening web link: $($_.Exception.Message)" -Type "Error"
+        Write-GuiLog -Message "Fehler beim Öffnen des Weblinks: $($_.Exception.Message)" -Type "Error"
     }
 }
 
@@ -438,26 +491,26 @@ function Complete-ModuleInstall {
         foreach ($entry in $output) {
             if ($entry.Type -eq "Result") {
                 $success = [bool]$entry.Success
-                Update-LogDisplay -Message $entry.Message -Type $(if ($success) { "Success" } else { "Error" })
+                Write-GuiLog -Message $entry.Message -Type $(if ($success) { "Success" } else { "Error" })
             }
             elseif ($entry.Type -in @("Info", "Warning", "Error", "Success")) {
-                Update-LogDisplay -Message $entry.Message -Type $entry.Type
+                Write-GuiLog -Message $entry.Message -Type $entry.Type
             }
         }
         foreach ($err in $job.PowerShell.Streams.Error) {
-            Update-LogDisplay -Message "$($job.ModuleName): $($err.Exception.Message)" -Type "Warning"
+            Write-GuiLog -Message "$($job.ModuleName): $($err.Exception.Message)" -Type "Warning"
         }
         if (-not $success) {
-            Update-LogDisplay -Message "Error installing module $($job.ModuleName)." -Type "Error"
+            Write-GuiLog -Message "Fehler bei der Installation des Moduls $($job.ModuleName)." -Type "Error"
         }
     }
     catch {
-        Update-LogDisplay -Message "Error installing module $($job.ModuleName): $($_.Exception.Message)" -Type "Error"
+        Write-GuiLog -Message "Fehler bei der Installation des Moduls $($job.ModuleName): $($_.Exception.Message)" -Type "Error"
     }
     finally {
         $job.PowerShell.Dispose()
-        if ($Global:window) { $Global:window.Cursor = $null }
-        Check-AllModules
+        if ($script:window) { $script:window.Cursor = $null }
+        Show-ModuleStatus
     }
 }
 
@@ -465,29 +518,33 @@ function Install-ModuleHandler {
     param($buttonSender)
     $button = [System.Windows.Controls.Button]$buttonSender
     $moduleName = $button.Tag.ToString()
-    
+
     $moduleInfo = $requiredModules | Where-Object { $_.Name -eq $moduleName } | Select-Object -First 1
-    
+
     if ($moduleInfo) {
         if ($script:installJob) {
-            Update-LogDisplay -Message "Another module installation ($($script:installJob.ModuleName)) is still running. Please wait." -Type "Warning"
+            Write-GuiLog -Message "Eine andere Modulinstallation ($($script:installJob.ModuleName)) läuft noch. Bitte warten." -Type "Warning"
             return
         }
 
+        $confirmText = "Modul '$moduleName' (Mindestversion $($moduleInfo.MinVersion)) aus der PowerShell Gallery für den aktuellen Benutzer installieren/aktualisieren?"
+        if ($moduleInfo.Deprecated) {
+            $confirmText = "Hinweis: '$moduleName' ist von Microsoft abgekündigt (Nachfolger: Microsoft.Graph / Microsoft.Entra) und sollte nur noch für Altskripte verwendet werden.`n`n$confirmText"
+        }
         $confirm = [System.Windows.MessageBox]::Show(
-            "Install/Update module '$moduleName' (minimum version $($moduleInfo.MinVersion)) from the PowerShell Gallery for the current user?",
-            "Install Module",
+            $confirmText,
+            "Modul installieren",
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Question)
         if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
-            Update-LogDisplay -Message "Installation of $moduleName cancelled by user." -Type "Info"
+            Write-GuiLog -Message "Installation von $moduleName vom Benutzer abgebrochen." -Type "Info"
             return
         }
 
-        Update-LogDisplay -Message "Starting installation of $moduleName (running in background)..." -Type "Info"
+        Write-GuiLog -Message "Installation von $moduleName wird gestartet (läuft im Hintergrund)..." -Type "Info"
         $button.IsEnabled = $false
-        $button.Content = "Installing..."
-        if ($Global:window) { $Global:window.Cursor = [System.Windows.Input.Cursors]::AppStarting }
+        $button.Content = "Installiere..."
+        if ($script:window) { $script:window.Cursor = [System.Windows.Input.Cursors]::AppStarting }
 
         try {
             $ps = [System.Management.Automation.PowerShell]::Create()
@@ -507,20 +564,20 @@ function Install-ModuleHandler {
         }
         catch {
             $script:installJob = $null
-            if ($Global:window) { $Global:window.Cursor = $null }
-            Update-LogDisplay -Message "Error starting installation of ${moduleName}: $($_.Exception.Message)" -Type "Error"
-            Check-AllModules
+            if ($script:window) { $script:window.Cursor = $null }
+            Write-GuiLog -Message "Fehler beim Starten der Installation von ${moduleName}: $($_.Exception.Message)" -Type "Error"
+            Show-ModuleStatus
         }
     }
 }
 
 # XAML für die GUI (ohne Connect-Funktionen, mit ExecutionPolicy)
 $xaml = @"
-<Window 
+<Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="PhinIT | easyPSInfo - PowerShell Module &amp; Policy Manager - with Script Launcher"
-    Height="1000" 
+    Title="PhinIT | easyPSInfo - PowerShell-Modul- &amp; Richtlinien-Manager mit Script-Launcher"
+    Height="1000"
     Width="1450"
     WindowStartupLocation="CenterScreen"
     Background="#FFFFFF"
@@ -689,8 +746,8 @@ $xaml = @"
         <!-- Header -->
         <Border Grid.Row="0" Background="#FF1C323C" Padding="20,15">
             <StackPanel>
-                <TextBlock Text="PhinIT | easyPSInfo - PowerShell Module &amp; Policy Manager - with Script Launcher" FontSize="20" FontWeight="SemiBold" Foreground="#e2e2e2"/>
-                <TextBlock Text="Manage PowerShell modules and execution policies | Launch scripts from subfolders" FontSize="12" Foreground="#d0e8ff" Margin="0,5,0,0"/>
+                <TextBlock Text="PhinIT | easyPSInfo - PowerShell-Modul- &amp; Richtlinien-Manager mit Script-Launcher" FontSize="20" FontWeight="SemiBold" Foreground="#e2e2e2"/>
+                <TextBlock Text="PowerShell-Module und Ausführungsrichtlinien verwalten | Skripte aus dem gewählten Basisordner starten" FontSize="12" Foreground="#d0e8ff" Margin="0,5,0,0"/>
             </StackPanel>
         </Border>
         <!-- Content with Split Layout -->
@@ -709,7 +766,7 @@ $xaml = @"
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <!-- Module Check Section -->
-                <GroupBox Grid.Row="0" Header="PowerShell Modules" Style="{StaticResource CardGroupBox}">
+                <GroupBox Grid.Row="0" Header="PowerShell-Module" Style="{StaticResource CardGroupBox}">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
@@ -718,19 +775,37 @@ $xaml = @"
                         <ListView Grid.Row="0" x:Name="lvModules" Margin="0,5,0,10" BorderThickness="1" BorderBrush="#E0E0E0" Height="260">
                             <ListView.View>
                                 <GridView>
-                                    <GridViewColumn Header="Module" Width="410">
+                                    <GridViewColumn Header="Modul" Width="320">
                                         <GridViewColumn.CellTemplate>
                                             <DataTemplate>
-                                                <TextBlock Text="{Binding Name}" ToolTip="{Binding Description}" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding DisplayName}" ToolTip="{Binding ToolTip}" VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Deprecated}" Value="True">
+                                                                    <Setter Property="Foreground" Value="#B71C1C"/>
+                                                                    <Setter Property="FontStyle" Value="Italic"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
                                             </DataTemplate>
                                         </GridViewColumn.CellTemplate>
                                     </GridViewColumn>
-                                    <GridViewColumn Header="Required" DisplayMemberBinding="{Binding MinVersion}" Width="100"/>
-                                    <GridViewColumn Header="Installed" DisplayMemberBinding="{Binding InstalledVersion}" Width="100"/>
-                                    <GridViewColumn Header="Action" Width="120">
+                                    <GridViewColumn Header="Status" Width="90">
                                         <GridViewColumn.CellTemplate>
                                             <DataTemplate>
-                                                <Button Content="Install/Update" 
+                                                <TextBlock Text="{Binding Status}" ToolTip="{Binding ToolTip}" VerticalAlignment="Center"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="Benötigt" DisplayMemberBinding="{Binding MinVersion}" Width="100"/>
+                                    <GridViewColumn Header="Installiert" DisplayMemberBinding="{Binding InstalledVersion}" Width="110"/>
+                                    <GridViewColumn Header="Aktion" Width="120">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Button Content="Installieren"
                                                         Style="{StaticResource SmallModernButton}"
                                                         IsEnabled="{Binding InstallEnabled}"
                                                         Tag="{Binding Name}"/>
@@ -740,7 +815,7 @@ $xaml = @"
                                     <GridViewColumn Header="Link" Width="90">
                                         <GridViewColumn.CellTemplate>
                                             <DataTemplate>
-                                                <Button Content="Web Link" 
+                                                <Button Content="Webseite"
                                                         Style="{StaticResource LinkButton}"
                                                         Tag="{Binding Webseite}"/>
                                             </DataTemplate>
@@ -749,11 +824,11 @@ $xaml = @"
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                        <Button Grid.Row="1" x:Name="btnRefreshModules" Content="Refresh Modules" Style="{StaticResource ModernButton}" HorizontalAlignment="Left" Width="180" Height="25" Margin="0,5,0,0"/>
+                        <Button Grid.Row="1" x:Name="btnRefreshModules" Content="Module aktualisieren" Style="{StaticResource ModernButton}" HorizontalAlignment="Left" Width="180" Height="25" Margin="0,5,0,0"/>
                     </Grid>
                 </GroupBox>
                 <!-- ExecutionPolicy Section -->
-                <GroupBox Grid.Row="1" Header="PowerShell Execution Policies" Style="{StaticResource CardGroupBox}">
+                <GroupBox Grid.Row="1" Header="PowerShell-Ausführungsrichtlinien (ExecutionPolicy)" Style="{StaticResource CardGroupBox}">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -763,8 +838,8 @@ $xaml = @"
                             <ListView.View>
                                 <GridView>
                                     <GridViewColumn Header="Scope" DisplayMemberBinding="{Binding Description}" Width="330"/>
-                                    <GridViewColumn Header="Current Policy" DisplayMemberBinding="{Binding CurrentPolicy}" Width="150"/>
-                                    <GridViewColumn Header="Modify" Width="400">
+                                    <GridViewColumn Header="Aktuelle Richtlinie" DisplayMemberBinding="{Binding CurrentPolicy}" Width="150"/>
+                                    <GridViewColumn Header="Ändern" Width="400">
                                         <GridViewColumn.CellTemplate>
                                             <DataTemplate>
                                                 <StackPanel Orientation="Horizontal" IsEnabled="{Binding CanModify}">
@@ -780,33 +855,44 @@ $xaml = @"
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                        <Button Grid.Row="1" x:Name="btnRefreshPolicies" Content="Refresh Execution Policies" Style="{StaticResource ModernButton}" HorizontalAlignment="Left" Width="200" Height="25"/>
+                        <Button Grid.Row="1" x:Name="btnRefreshPolicies" Content="Richtlinien aktualisieren" Style="{StaticResource ModernButton}" HorizontalAlignment="Left" Width="200" Height="25"/>
                     </Grid>
                 </GroupBox>
                 <!-- Status Log -->
-                <GroupBox Grid.Row="2" Header="Status and Log" Style="{StaticResource CardGroupBox}" Margin="0,10,0,0">
+                <GroupBox Grid.Row="2" Header="Status und Protokoll" Style="{StaticResource CardGroupBox}" Margin="0,10,0,0">
                     <TextBox x:Name="txtLog" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              FontFamily="Consolas" FontSize="11" Background="#1E1E1E" Foreground="#A0D2A0" BorderThickness="0" Padding="5"/>
                 </GroupBox>
             </Grid>
             <!-- Right side - Script selection -->
-            <GroupBox Grid.Column="1" Header="Available PowerShell Scripts" Style="{StaticResource CardGroupBox}" Margin="10,0,0,0">
+            <GroupBox Grid.Column="1" Header="Verfügbare PowerShell-Skripte" Style="{StaticResource CardGroupBox}" Margin="10,0,0,0">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <!-- Suchfeld (optional, hier nicht implementiert) -->
-                        <!-- <RowDefinition Height="Auto"/> -->
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <!-- Script list -->
-                    <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" Margin="0,0,0,10">
+                    <!-- Basisordner der Skriptsuche -->
+                    <StackPanel Grid.Row="0" Orientation="Vertical" Margin="0,0,0,8">
+                        <TextBlock Text="Basisordner der Skriptsuche:" FontWeight="SemiBold" Margin="0,0,0,3"/>
+                        <TextBox x:Name="txtScriptBase" IsReadOnly="True" Background="#F7F7F7" BorderBrush="#E0E0E0" Padding="4,3"
+                                 ToolTip="Aktueller Basisordner; durchsucht werden dieser Ordner und seine Unterordner (max. 5 Ebenen, ohne Logs/Exports/Backups und 'old'-Ordner)."/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Button x:Name="btnSelectScriptBase" Content="Ordner wählen…" Style="{StaticResource SmallModernButton}"
+                                    ToolTip="Anderen Basisordner für die Skriptsuche auswählen"/>
+                            <Button x:Name="btnResetScriptBase" Content="Standard" Style="{StaticResource SmallModernButton}"
+                                    ToolTip="Standard-Basisordner wiederherstellen (Repository-Ordner 'src' bzw. Skriptordner)"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <!-- Skriptliste -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,0,0,10">
                         <StackPanel x:Name="spScriptList" Orientation="Vertical" Margin="0,3,0,3">
                             <!-- Script buttons will be added dynamically -->
                         </StackPanel>
                     </ScrollViewer>
                     <!-- Refresh button -->
-                    <Button Grid.Row="1" x:Name="btnRefreshScripts" 
-                            Content="Refresh Script List" Style="{StaticResource ModernButton}"
+                    <Button Grid.Row="2" x:Name="btnRefreshScripts"
+                            Content="Skriptliste aktualisieren" Style="{StaticResource ModernButton}"
                             Height="32"/>
                 </Grid>
             </GroupBox>
@@ -820,11 +906,11 @@ $xaml = @"
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" Orientation="Vertical" HorizontalAlignment="Left" VerticalAlignment="Center">
-                    <TextBlock Text="www.phinit.de | Andreas Hepp  | easyPSInfo  -  Version: 0.0.4  -  Update: 14.10.2026" FontSize="10" Foreground="#d0e8ff"/>
+                    <TextBlock Text="www.phinit.de | Andreas Hepp | easyPSInfo  -  Version: 0.0.5  -  Update: 14.10.2026" FontSize="10" Foreground="#d0e8ff"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <Button x:Name="btnExit" Content="Exit" Style="{StaticResource ExitButton}" Width="120" Height="32"/>
+                    <Button x:Name="btnExit" Content="Beenden" Style="{StaticResource ExitButton}" Width="120" Height="32"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -836,14 +922,13 @@ $xaml = @"
 # Teil 2: GUI-Funktionen, Event-Handler und Main Block
 #############################################
 
-# Funktion zum Laden der XAML-GUI
-$script:guiGlobalNames = @()
+# Funktion zum Laden der XAML-GUI (benannte Elemente werden als $script:-Variablen bereitgestellt)
 function Import-XamlGui {
     try {
         if ([string]::IsNullOrEmpty($xaml)) {
-            throw "XAML content is empty"
+            throw "XAML-Inhalt ist leer."
         }
-        
+
         $xmlReaderSettings = New-Object System.Xml.XmlReaderSettings
         $xmlReaderSettings.IgnoreWhitespace = $true
         $xmlReaderSettings.IgnoreComments = $true
@@ -851,28 +936,28 @@ function Import-XamlGui {
 
         $reader = $null
         $stringReader = $null
-        
+
         try {
             $stringReader = New-Object System.IO.StringReader($xaml)
             $reader = [System.Xml.XmlReader]::Create($stringReader, $xmlReaderSettings)
-            
+
             $window = [System.Windows.Markup.XamlReader]::Load($reader)
-            
+
             $regex = New-Object System.Text.RegularExpressions.Regex('x:Name="([^"]*)"')
             $nameMatches = $regex.Matches($xaml)
-            
+
             foreach ($match in $nameMatches) {
                 if ($match.Groups.Count -gt 1) {
                     $name = $match.Groups[1].Value
                     $element = $window.FindName($name)
-                    
+
                     if ($null -ne $element) {
-                        Set-Variable -Name $name -Value $element -Scope Global
-                        if ($script:guiGlobalNames -notcontains $name) { $script:guiGlobalNames += $name }
+                        Set-Variable -Name $name -Value $element -Scope Script
+                        if ($script:guiElementNames -notcontains $name) { $script:guiElementNames += $name }
                     }
                 }
             }
-            
+
             return $window
         }
         finally {
@@ -881,299 +966,424 @@ function Import-XamlGui {
         }
     }
     catch {
-        Write-Log "Error loading XAML: $($_.Exception.Message)" -Type "Error"
+        Write-AppLog "Fehler beim Laden der XAML-Oberfläche: $($_.Exception.Message)" -Type "Error"
         throw
     }
 }
 
-# Funktion zur Aktualisierung der Skriptliste
-function Update-ScriptList {
+# Prüft, ob ein Ordnername von der Skriptsuche ausgeschlossen ist (Laufzeitordner und "old"-Muster, case-insensitive)
+function Test-ScriptFolderExcluded {
+    [OutputType([bool])]
+    param ([string]$Name)
+    if ([string]::IsNullOrEmpty($Name)) { return $false }
+    if ($script:ExcludedFolderNames -contains $Name) { return $true }
+    foreach ($pattern in $script:ExcludedFolderPatterns) {
+        if ($Name -like $pattern) { return $true }
+    }
+    return $false
+}
+
+# Liefert den Pfad relativ zum Basisordner ('' = Basisordner selbst, $null = liegt außerhalb)
+function Get-RelativeFolderPath {
+    [OutputType([string])]
+    param (
+        [string]$BasePath,
+        [string]$Path
+    )
+    if ([string]::IsNullOrEmpty($BasePath) -or [string]::IsNullOrEmpty($Path)) { return $null }
+    $separators = [char[]]@('\', '/')
+    $normalizedBase = $BasePath.TrimEnd($separators)
+    $normalizedPath = $Path.TrimEnd($separators)
+    if ([string]::Equals($normalizedBase, $normalizedPath, [System.StringComparison]::OrdinalIgnoreCase)) { return '' }
+    if ($normalizedPath.Length -gt $normalizedBase.Length -and
+        $normalizedPath.StartsWith($normalizedBase, [System.StringComparison]::OrdinalIgnoreCase) -and
+        $normalizedPath[$normalizedBase.Length] -in $separators) {
+        return $normalizedPath.Substring($normalizedBase.Length).TrimStart($separators)
+    }
+    return $null
+}
+
+# Prüft, ob ein Ordner ein Tool-Sammelordner ist (Repository-Ordner "src" oder enthält weitere
+# Tool-Ordner nach dem Muster <Ordner>\<Ordner>.ps1). Laufwerkswurzeln werden nie verwendet.
+function Test-ToolSourceFolder {
+    [OutputType([bool])]
+    param (
+        [string]$Path,
+        [string]$ExcludeChildFolder
+    )
+    if ([string]::IsNullOrEmpty($Path)) { return $false }
     try {
-        Update-LogDisplay -Message "Loading available PowerShell scripts..." -Type "Info"
-        
-        $spScriptList = $Global:window.FindName("spScriptList")
+        $dirInfo = New-Object System.IO.DirectoryInfo($Path)
+        if (-not $dirInfo.Exists -or $null -eq $dirInfo.Parent) { return $false }
+        if ($dirInfo.Name -ieq 'src') { return $true }
+        foreach ($child in $dirInfo.GetDirectories()) {
+            if ($ExcludeChildFolder -and ((Get-RelativeFolderPath -BasePath $ExcludeChildFolder -Path $child.FullName) -eq '')) { continue }
+            if ([System.IO.File]::Exists([System.IO.Path]::Combine($child.FullName, "$($child.Name).ps1"))) { return $true }
+        }
+    }
+    catch {
+        Write-Verbose "Ordner '$Path' konnte nicht geprüft werden: $($_.Exception.Message)"
+    }
+    return $false
+}
+
+# Standard-Basisordner der Skriptsuche: liegt das Tool unter <src>\easyPSInfo\easyPSInfo.ps1 und ist <src> ein
+# Tool-Sammelordner, wird <src> durchsucht (alle Tools des Repositorys), sonst der eigene Skriptordner.
+function Get-DefaultScriptSearchBase {
+    [OutputType([string])]
+    param ()
+    $root = $script:ScriptRoot
+    if ([string]::IsNullOrEmpty($root) -or [string]::IsNullOrEmpty($script:ScriptPath)) { return $root }
+    try {
+        $rootInfo = New-Object System.IO.DirectoryInfo($root)
+        $toolName = [System.IO.Path]::GetFileNameWithoutExtension($script:ScriptPath)
+        if ($rootInfo.Name -ine $toolName -or $null -eq $rootInfo.Parent) { return $root }
+        if (Test-ToolSourceFolder -Path $rootInfo.Parent.FullName -ExcludeChildFolder $rootInfo.FullName) {
+            return $rootInfo.Parent.FullName
+        }
+    }
+    catch {
+        Write-Verbose "Standard-Basisordner konnte nicht ermittelt werden: $($_.Exception.Message)"
+    }
+    return $root
+}
+
+# Liest einen gespeicherten Basisordner aus %APPDATA%\PhinIT\easyPSInfo\settings.json und validiert ihn
+function Get-SavedScriptSearchBase {
+    [OutputType([string])]
+    param ()
+    if (-not $script:SettingsFile -or -not (Test-Path -LiteralPath $script:SettingsFile -PathType Leaf)) { return $null }
+    try {
+        $settingsInfo = Get-Item -LiteralPath $script:SettingsFile -ErrorAction Stop
+        if ($settingsInfo.Length -gt 64KB) { throw "Einstellungsdatei ist unplausibel groß." }
+        $settings = Get-Content -LiteralPath $script:SettingsFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $settings -or $settings -is [array] -or -not ($settings.PSObject.Properties.Name -contains 'ScriptSearchBase')) { return $null }
+        $savedPath = $settings.ScriptSearchBase
+        if ($null -eq $savedPath -or ($savedPath -is [string] -and [string]::IsNullOrWhiteSpace($savedPath))) { return $null }
+        if ($savedPath -isnot [string] -or $savedPath.Length -gt 1024 -or
+            $savedPath.IndexOfAny([System.IO.Path]::GetInvalidPathChars()) -ge 0 -or
+            -not [System.IO.Path]::IsPathRooted($savedPath)) {
+            throw "Gespeicherter Basisordner ist kein gültiger absoluter Pfad."
+        }
+        if (-not (Test-Path -LiteralPath $savedPath -PathType Container)) {
+            Write-AppLog -Message "Gespeicherter Basisordner der Skriptsuche ist nicht mehr erreichbar - Standard wird verwendet." -Type "Warning"
+            return $null
+        }
+        return [System.IO.Path]::GetFullPath($savedPath)
+    }
+    catch {
+        Write-AppLog -Message "Einstellungen konnten nicht gelesen werden ($($_.Exception.Message)) - Standard wird verwendet." -Type "Warning"
+        return $null
+    }
+}
+
+# Speichert den gewählten Basisordner ($null = Standard) in %APPDATA%\PhinIT\easyPSInfo\settings.json
+function Save-ScriptSearchBaseSetting {
+    param ([string]$Path)
+    if (-not $script:SettingsFile) { return }
+    try {
+        if (-not (Test-Path -LiteralPath $script:SettingsFolder -PathType Container)) {
+            New-Item -Path $script:SettingsFolder -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        }
+        $value = if ([string]::IsNullOrEmpty($Path)) { $null } else { $Path }
+        $json = [PSCustomObject]@{ ScriptSearchBase = $value } | ConvertTo-Json
+        [System.IO.File]::WriteAllText($script:SettingsFile, $json, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    catch {
+        Write-GuiLog -Message "Einstellung für den Basisordner konnte nicht gespeichert werden: $($_.Exception.Message)" -Type "Warning"
+    }
+}
+
+# Legt den Basisordner der Skriptsuche fest (-UseDefault = Standard), aktualisiert Anzeige, Einstellung und Liste
+function Set-ScriptSearchBase {
+    [CmdletBinding(SupportsShouldProcess)]
+    param (
+        [string]$Path,
+        [switch]$UseDefault,
+        [switch]$NoSave,
+        [switch]$NoRefresh
+    )
+    if ($UseDefault -or [string]::IsNullOrEmpty($Path)) {
+        $newBase  = Get-DefaultScriptSearchBase
+        $isCustom = $false
+    }
+    else {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            Write-GuiLog -Message "Der Ordner '$Path' existiert nicht oder ist nicht erreichbar." -Type "Error"
+            return
+        }
+        $newBase  = [System.IO.Path]::GetFullPath($Path)
+        $isCustom = $true
+    }
+    if ([string]::IsNullOrEmpty($newBase)) {
+        Write-GuiLog -Message "Kein gültiger Basisordner für die Skriptsuche gefunden." -Type "Error"
+        return
+    }
+    if (-not $PSCmdlet.ShouldProcess($newBase, "Basisordner der Skriptsuche festlegen")) { return }
+
+    $script:ScriptSearchBase         = $newBase
+    $script:ScriptSearchBaseIsCustom = $isCustom
+    if ($script:txtScriptBase) {
+        $script:txtScriptBase.Text = $newBase
+        $script:txtScriptBase.ToolTip = if ($isCustom) { "Benutzerdefinierter Basisordner: $newBase" } else { "Standard-Basisordner: $newBase" }
+    }
+    if (-not $NoSave) {
+        Save-ScriptSearchBaseSetting -Path $(if ($isCustom) { $newBase } else { $null })
+    }
+    Write-GuiLog -Message "Basisordner der Skriptsuche ($(if ($isCustom) { 'benutzerdefiniert' } else { 'Standard' })): $newBase" -Type "Info"
+    if (-not $NoRefresh) { Show-ScriptList }
+}
+
+# Öffnet einen Ordnerauswahldialog für den Basisordner der Skriptsuche
+function Select-ScriptSearchBase {
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    try {
+        $dialog.Description = "Basisordner für die Skriptsuche auswählen (Unterordner werden bis zu $($script:MaxScriptSearchDepth) Ebenen tief durchsucht)"
+        $dialog.ShowNewFolderButton = $false
+        if ($script:ScriptSearchBase -and (Test-Path -LiteralPath $script:ScriptSearchBase -PathType Container)) {
+            $dialog.SelectedPath = $script:ScriptSearchBase
+        }
+        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and -not [string]::IsNullOrEmpty($dialog.SelectedPath)) {
+            Set-ScriptSearchBase -Path $dialog.SelectedPath
+        }
+        else {
+            Write-GuiLog -Message "Ordnerauswahl abgebrochen." -Type "Info"
+        }
+    }
+    catch {
+        Write-GuiLog -Message "Fehler bei der Ordnerauswahl: $($_.Exception.Message)" -Type "Error"
+    }
+    finally {
+        $dialog.Dispose()
+    }
+}
+
+# Ermittelt die zu durchsuchenden Ordner: Basisordner + Unterordner bis $MaxDepth Ebenen (Breitensuche).
+# Ausgeschlossene Ordner (inkl. Unterbaum), Junctions/symbolische Links und nicht zugreifbare Ordner werden übersprungen.
+function Get-ScriptSearchFolder {
+    [OutputType([PSCustomObject])]
+    param (
+        [Parameter(Mandatory)]
+        [string]$BasePath,
+        [int]$MaxDepth = 5,
+        [int]$MaxFolders = 2000
+    )
+    $folders = New-Object System.Collections.Generic.List[string]
+    $queue = New-Object System.Collections.Generic.Queue[object]
+    $inaccessible = 0
+    $limitReached = $false
+
+    $baseInfo = New-Object System.IO.DirectoryInfo($BasePath)
+    $baseExcluded = Test-ScriptFolderExcluded -Name $baseInfo.Name
+    if (-not $baseExcluded) { $folders.Add($baseInfo.FullName) }
+    $queue.Enqueue([PSCustomObject]@{ Directory = $baseInfo; Depth = 0 })
+
+    while ($queue.Count -gt 0 -and -not $limitReached) {
+        $current = $queue.Dequeue()
+        if ($current.Depth -ge $MaxDepth) { continue }
+        try {
+            $children = $current.Directory.GetDirectories()
+        }
+        catch {
+            $inaccessible++
+            continue
+        }
+        foreach ($child in ($children | Sort-Object -Property Name)) {
+            if (($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+            if (Test-ScriptFolderExcluded -Name $child.Name) { continue }
+            if ($folders.Count -ge $MaxFolders) {
+                $limitReached = $true
+                break
+            }
+            $folders.Add($child.FullName)
+            $queue.Enqueue([PSCustomObject]@{ Directory = $child; Depth = $current.Depth + 1 })
+        }
+    }
+
+    return [PSCustomObject]@{
+        Folders      = $folders
+        BaseExcluded = $baseExcluded
+        Inaccessible = $inaccessible
+        LimitReached = $limitReached
+    }
+}
+
+# Funktion zur Anzeige der Skriptliste (hierarchisch relativ zum Basisordner)
+function Show-ScriptList {
+    try {
+        Write-GuiLog -Message "Verfügbare PowerShell-Skripte werden geladen..." -Type "Info"
+
+        $spScriptList = $script:window.FindName("spScriptList")
         if ($null -eq $spScriptList) {
-            Update-LogDisplay -Message "Script list element not found!" -Type "Error"
+            Write-GuiLog -Message "Element für die Skriptliste nicht gefunden!" -Type "Error"
             return
         }
-        
+
         $spScriptList.Children.Clear()
-        
-        $scriptFolders = New-Object System.Collections.Generic.List[string]
-        # $initialBaseFolder wird als Referenz für die hierarchische Anzeige verwendet
-        $initialBaseFolder = $script:ScriptRoot
-        if ([string]::IsNullOrEmpty($script:ScriptPath)) {
-            Update-LogDisplay -Message "Script path not available (e.g. ISE selection) - using '$initialBaseFolder' as base for the script search." -Type "Warning"
+
+        if ([string]::IsNullOrEmpty($script:ScriptSearchBase)) {
+            $script:ScriptSearchBase = Get-DefaultScriptSearchBase
         }
-        
-        if ([string]::IsNullOrEmpty($initialBaseFolder)) {
-            Update-LogDisplay -Message "No valid script directory base found." -Type "Error"
+        $searchBase = $script:ScriptSearchBase
+        if ([string]::IsNullOrEmpty($script:ScriptPath)) {
+            Write-GuiLog -Message "Skriptpfad nicht verfügbar (z.B. Auswahl in der ISE) - '$searchBase' wird als Basis für die Skriptsuche verwendet." -Type "Warning"
+        }
+        if ([string]::IsNullOrEmpty($searchBase)) {
+            Write-GuiLog -Message "Kein gültiger Basisordner für die Skriptsuche gefunden." -Type "Error"
             return
         }
-        
-        # Ausschlussmuster für Ordnernamen (case-insensitive durch -like)
-        $excludeFolderPatterns = @("*old*", "*#old*", "*# old*")
+        if (-not (Test-Path -LiteralPath $searchBase -PathType Container -ErrorAction SilentlyContinue)) {
+            Write-GuiLog -Message "Basisordner '$searchBase' existiert nicht oder ist nicht erreichbar." -Type "Error"
+            return
+        }
 
-        if (Test-Path -Path $initialBaseFolder -ErrorAction SilentlyContinue) {
-            $baseFolderLeafName = (Split-Path -Leaf $initialBaseFolder)
-            $skipBaseFolderSearch = $false
-            foreach ($pattern in $excludeFolderPatterns) {
-                if ($baseFolderLeafName -like $pattern) {
-                    $skipBaseFolderSearch = $true
-                    Update-LogDisplay -Message "Base folder '$initialBaseFolder' is excluded from direct script search because its name matches pattern '$pattern'." -Type "Warning"
-                    break
-                }
-            }
+        $searchResult = Get-ScriptSearchFolder -BasePath $searchBase -MaxDepth $script:MaxScriptSearchDepth -MaxFolders $script:MaxScriptSearchFolders
+        if ($searchResult.BaseExcluded) {
+            Write-GuiLog -Message "Der Basisordner selbst wird nicht direkt durchsucht, da sein Name einem Ausschlussmuster entspricht." -Type "Warning"
+        }
+        if ($searchResult.Inaccessible -gt 0) {
+            Write-GuiLog -Message "$($searchResult.Inaccessible) Ordner waren nicht zugreifbar und wurden übersprungen." -Type "Warning"
+        }
+        if ($searchResult.LimitReached) {
+            Write-GuiLog -Message "Suche auf $($script:MaxScriptSearchFolders) Ordner begrenzt - bitte einen spezifischeren Basisordner wählen." -Type "Warning"
+        }
+        Write-GuiLog -Message "Skriptsuche in $($searchResult.Folders.Count) Ordnern (max. $($script:MaxScriptSearchDepth) Ebenen, ohne $($script:ExcludedFolderNames -join '/') und 'old'-Ordner)." -Type "Info"
 
-            if (-not $skipBaseFolderSearch) {
-                Update-LogDisplay -Message "Adding base path for script search: $initialBaseFolder" -Type "Info"
-                $scriptFolders.Add($initialBaseFolder)
-            }
-            # else: $initialBaseFolder is skipped for direct script search, but still acts as categorization root.
-
-            # Alle Unterordner rekursiv hinzufügen, die nicht den Ausschlussmustern entsprechen
+        $scripts = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+        # Das eigene Skript nicht in der Liste anbieten (würde die GUI verschachtelt erneut starten)
+        $currentScriptFullName = $script:ScriptPath
+        foreach ($folder in $searchResult.Folders) {
             try {
-                # Hole ALLE Unterverzeichnisse zuerst
-                $allSubDirectories = Get-ChildItem -Path $initialBaseFolder -Directory -Recurse -ErrorAction SilentlyContinue
-                
-                $validSubDirectories = New-Object System.Collections.Generic.List[string]
-                $trimmedInitialBaseFolder = $initialBaseFolder.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
-
-                foreach ($dirInfoObject in $allSubDirectories) {
-                    $currentDirFullName = $dirInfoObject.FullName
-                    $isAnySegmentExcluded = $false
-                    
-                    $relativePathString = $null
-                    if ($currentDirFullName.Length -gt $trimmedInitialBaseFolder.Length) {
-                        if ($currentDirFullName.StartsWith($trimmedInitialBaseFolder + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-                            $relativePathString = $currentDirFullName.Substring($trimmedInitialBaseFolder.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
-                        } else {
-                            # Nicht wirklich ein Unterpfad im Sinne der Hierarchie vom initialBaseFolder, überspringen
-                            continue
-                        }
-                    } else {
-                         # $currentDirFullName ist $initialBaseFolder selbst oder kürzer
-                        continue
-                    }
-                    
-                    if (-not ([string]::IsNullOrEmpty($relativePathString))) {
-                        $pathSegments = $relativePathString.Split([System.IO.Path]::DirectorySeparatorChar)
-                        foreach ($segment in $pathSegments) {
-                            if ([string]::IsNullOrEmpty($segment)) { continue } 
-                            foreach ($pattern in $excludeFolderPatterns) {
-                                if ($segment -like $pattern) {
-                                    $isAnySegmentExcluded = $true
-                                    break # pattern loop
-                                }
-                            }
-                            if ($isAnySegmentExcluded) { break } # segment loop
-                        }
-                    }
-
-                    if (-not $isAnySegmentExcluded) {
-                        $validSubDirectories.Add($currentDirFullName)
-                    }
-                }
-                
-                $scriptFolders.AddRange($validSubDirectories)
-                
-                if ($validSubDirectories.Count -gt 0) {
-                    Update-LogDisplay -Message "Added $($validSubDirectories.Count) subfolders to script search (after filtering path segments)." -Type "Info"
-                } else {
-                     Update-LogDisplay -Message "No subfolders added to script search after path segment filtering." -Type "Info"
+                $folderInfo = New-Object System.IO.DirectoryInfo($folder)
+                foreach ($file in $folderInfo.GetFiles("*.ps1")) {
+                    # .NET-Platzhalter "*.ps1" trifft unter Windows ggf. auch "*.ps1xml" - Erweiterung exakt prüfen
+                    if ($file.Extension -ine ".ps1") { continue }
+                    if ($currentScriptFullName -and [string]::Equals($file.FullName, $currentScriptFullName, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+                    $scripts.Add($file)
                 }
             }
             catch {
-                Update-LogDisplay -Message "Error processing subfolders from ${initialBaseFolder}: $($_.Exception.Message)" -Type "Warning"
+                Write-GuiLog -Message "Fehler bei der Skriptsuche in '$folder': $($_.Exception.Message)" -Type "Warning"
             }
         }
-        else {
-            Update-LogDisplay -Message "Initial base folder for scripts $initialBaseFolder does not exist or is not accessible." -Type "Error"
-            return 
-        }
-        
-        if ($scriptFolders.Count -gt 0) {
-            Update-LogDisplay -Message "Searching for scripts in $($scriptFolders.Count) locations." -Type "Info"
-        } else {
-            Update-LogDisplay -Message "No script folders to search (base folder might be excluded or contain no valid subfolders after exclusions)." -Type "Warning"
-        }
-        
-        $scripts = New-Object System.Collections.Generic.List[object]
-        # Das eigene Skript nicht in der Liste anbieten (würde die GUI verschachtelt erneut starten)
-        $currentScriptFullName = $script:ScriptPath
-        foreach ($folder in $scriptFolders) { 
-            if (-not [string]::IsNullOrEmpty($folder) -and (Test-Path -LiteralPath $folder -ErrorAction SilentlyContinue)) {
-                try {
-                    # Get scripts only from the current $folder, not its subdirectories (Depth 0 implicitly)
-                    $folderScripts = @(Get-ChildItem -LiteralPath $folder -Filter "*.ps1" -File -ErrorAction Stop |
-                                     Where-Object { $null -eq $currentScriptFullName -or $_.FullName -ne $currentScriptFullName })
-                    foreach ($folderScript in $folderScripts) {
-                        $scripts.Add($folderScript)
-                    }
-                }
-                catch {
-                    Update-LogDisplay -Message "Error searching for scripts in $folder - $($_.Exception.Message)" -Type "Error"
-                }
-            }
-        }
-        
+
         if ($scripts.Count -eq 0) {
-            Update-LogDisplay -Message "No PowerShell scripts found in any searched location (after applying exclusions)." -Type "Warning"
+            Write-GuiLog -Message "Keine PowerShell-Skripte gefunden (nach Anwendung der Ausschlüsse)." -Type "Warning"
             $textBlock = New-Object System.Windows.Controls.TextBlock
-            $textBlock.Text = "No scripts found."
+            $textBlock.Text = "Keine Skripte gefunden."
             $textBlock.Margin = "9"
             $textBlock.Foreground = "Gray"
             $textBlock.FontStyle = "Italic"
             [void]$spScriptList.Children.Add($textBlock)
             return
         }
-        
-        $categorizationBase = $initialBaseFolder 
 
-        $scriptsByExactDirectory = $scripts | Group-Object -Property DirectoryName
-
-        # Erstelle eine korrekte hierarchische Sortierung
-        $sortedDirectoryGroups = $scriptsByExactDirectory | Sort-Object {
-            $dirPath = $_.Name # Full path of the directory being grouped
-            if ($dirPath -eq $categorizationBase) {
-                "000000_ROOT" # Root folder always first
-            } else {
-                # Berechne den relativen Pfad für hierarchische Sortierung
-                $relativePath = ""
-                if ($dirPath.StartsWith($categorizationBase, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $relativePath = $dirPath.Substring($categorizationBase.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
-                } else {
-                    $relativePath = $dirPath
-                }
-                
-                # Ersetze Backslashes durch Forward-Slashes für konsistente Sortierung
-                $normalizedPath = $relativePath.Replace('\', '/')
-                
-                # Teile den Pfad in Segmente und sortiere hierarchisch
-                $segments = $normalizedPath -split '/' | Where-Object { $_ -ne '' }
-                $depth = $segments.Count
-                
-                # Erstelle Sortier-Key: Tiefe + normalisierter Pfad für korrekte Hierarchie
-                "{0:D3}_{1}" -f $depth, $normalizedPath.ToLower()
-            }
+        # Hierarchische Sortierung: Basisordner zuerst, danach Baumreihenfolge (Ordner direkt gefolgt von seinen Unterordnern)
+        $sortedDirectoryGroups = $scripts | Group-Object -Property DirectoryName | Sort-Object -Property {
+            $relativePath = Get-RelativeFolderPath -BasePath $searchBase -Path $_.Name
+            if ($null -eq $relativePath) { $relativePath = $_.Name }
+            (($relativePath -split '[\\/]' | Where-Object { $_ -ne '' }) -join [char]1).ToLowerInvariant()
         }
-        
+
         foreach ($directoryGroup in $sortedDirectoryGroups) {
-            $currentDirectoryPath = $directoryGroup.Name 
+            $currentDirectoryPath = $directoryGroup.Name
             $scriptsInDirectory = $directoryGroup.Group | Sort-Object -Property Name
-
-            $headerTextString = ""
-            $headerMarginValueString = "0,10,0,5"
             $buttonLeftMarginValue = 10
-            $currentDepth = 0
 
-            if ($currentDirectoryPath -eq $categorizationBase) {
-                $headerTextString = "Folder Root" 
+            $relativePath = Get-RelativeFolderPath -BasePath $searchBase -Path $currentDirectoryPath
+            if ($relativePath -eq '') {
+                $headerTextString = "Basisordner ($([System.IO.Path]::GetFileName($searchBase.TrimEnd('\', '/'))))"
+            }
+            elseif ($null -ne $relativePath) {
+                $pathSegments = @($relativePath -split '[\\/]' | Where-Object { $_ -ne '' })
+                $currentDepth = $pathSegments.Count
+                $headerTextString = ("  " * $currentDepth) + ($pathSegments -join ' -> ')
+                $buttonLeftMarginValue = 10 + ($currentDepth * 15)
             }
             else {
-                # Berechne die korrekte Tiefe und den Display-Namen
-                $relativePath = ""
-                if ($currentDirectoryPath.StartsWith($categorizationBase, [System.StringComparison]::OrdinalIgnoreCase) `
-                    -and $currentDirectoryPath.Length -gt $categorizationBase.Length) {
-                    
-                    $relativePath = $currentDirectoryPath.Substring($categorizationBase.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
-                    $pathSegments = $relativePath -split '[\\/]' | Where-Object { $_ -ne '' }
-                    $currentDepth = $pathSegments.Count
-                    
-                    # Zeige den vollen relativen Pfad für bessere Klarheit
-                    $displayPath = $pathSegments -join ' -> '
-                    $indentPrefix = "  " * $currentDepth
-                    $headerTextString = "$indentPrefix$displayPath"
-                } else {
-                    # Fallback für Pfade außerhalb der Basis
-                    $headerTextString = (Split-Path -Leaf $currentDirectoryPath)
-                }
-                
-                # Anpassung der Button-Einrückung basierend auf der Tiefe
-                $buttonLeftMarginValue = 10 + ($currentDepth * 15)
+                # Fallback für Pfade außerhalb der Basis
+                $headerTextString = [System.IO.Path]::GetFileName($currentDirectoryPath)
             }
 
             $headerBorder = New-Object System.Windows.Controls.Border
             $headerBorder.Background = "#E3F2FD"
-            $headerBorder.Margin = $headerMarginValueString
+            $headerBorder.Margin = "0,10,0,5"
             $headerBorder.Padding = "8,4"
             $headerBorder.CornerRadius = "3"
-            
+            $headerBorder.ToolTip = $currentDirectoryPath
+
             $headerTextElement = New-Object System.Windows.Controls.TextBlock
             $headerTextElement.Text = $headerTextString
             $headerTextElement.FontWeight = "Bold"
             $headerTextElement.FontSize = "10"
             $headerBorder.Child = $headerTextElement
             [void]$spScriptList.Children.Add($headerBorder)
-            
-            foreach ($script in $scriptsInDirectory) {
+
+            foreach ($scriptFile in $scriptsInDirectory) {
                 $button = New-Object System.Windows.Controls.Button
-                $button.Style = $Global:window.FindResource("ScriptButtonStyle")
-                $button.Tag = $script.FullName
+                $button.Style = $script:window.FindResource("ScriptButtonStyle")
+                $button.Tag = $scriptFile.FullName
                 $button.Margin = "$($buttonLeftMarginValue),2,5,2"
-                
+                $button.ToolTip = $scriptFile.FullName
+
                 $buttonContent = New-Object System.Windows.Controls.StackPanel
                 $buttonContent.Orientation = "Vertical"
-                
+
                 $nameText = New-Object System.Windows.Controls.TextBlock
-                $nameText.Text = $script.Name
+                $nameText.Text = $scriptFile.Name
                 $nameText.FontWeight = "SemiBold"
                 [void]$buttonContent.Children.Add($nameText)
-                
-                try {
-                    $scriptFileContent = @(Get-Content -LiteralPath $script.FullName -TotalCount 20 -ErrorAction SilentlyContinue)
-                    $synopsisDirectiveLine = $scriptFileContent | Where-Object { $_ -match "\.SYNOPSIS" } | Select-Object -First 1
-                    
-                    if ($synopsisDirectiveLine) {
-                        $synopsisDirectiveIndex = -1
-                        for ($i = 0; $i -lt $scriptFileContent.Count; $i++) {
-                            if ($scriptFileContent[$i] -eq $synopsisDirectiveLine) {
-                                $synopsisDirectiveIndex = $i
-                                break
-                            }
-                        }
 
-                        if ($synopsisDirectiveIndex -ne -1) {
-                            for ($i = $synopsisDirectiveIndex + 1; $i -lt $scriptFileContent.Count; $i++) {
-                                $potentialDescription = $scriptFileContent[$i].Trim()
-                                if (-not [string]::IsNullOrWhiteSpace($potentialDescription) -and -not $potentialDescription.StartsWith("#")) {
-                                    $descText = New-Object System.Windows.Controls.TextBlock
-                                    $descText.Text = $potentialDescription
-                                    $descText.TextTrimming = "CharacterEllipsis"
-                                    $descText.Opacity = 0.7
-                                    $descText.FontSize = "10"
-                                    [void]$buttonContent.Children.Add($descText)
-                                    break
-                                }
+                try {
+                    $scriptFileContent = @(Get-Content -LiteralPath $scriptFile.FullName -TotalCount 20 -ErrorAction SilentlyContinue)
+                    $synopsisDirectiveIndex = -1
+                    for ($i = 0; $i -lt $scriptFileContent.Count; $i++) {
+                        if ($scriptFileContent[$i] -match "\.SYNOPSIS") {
+                            $synopsisDirectiveIndex = $i
+                            break
+                        }
+                    }
+
+                    if ($synopsisDirectiveIndex -ne -1) {
+                        for ($i = $synopsisDirectiveIndex + 1; $i -lt $scriptFileContent.Count; $i++) {
+                            $potentialDescription = $scriptFileContent[$i].Trim()
+                            if (-not [string]::IsNullOrWhiteSpace($potentialDescription) -and -not $potentialDescription.StartsWith("#")) {
+                                $descText = New-Object System.Windows.Controls.TextBlock
+                                $descText.Text = $potentialDescription
+                                $descText.TextTrimming = "CharacterEllipsis"
+                                $descText.Opacity = 0.7
+                                $descText.FontSize = "10"
+                                [void]$buttonContent.Children.Add($descText)
+                                break
                             }
                         }
                     }
                 }
                 catch {
-                    Write-Verbose "SYNOPSIS of '$($script.Name)' could not be read: $($_.Exception.Message)"
+                    Write-Verbose "SYNOPSIS von '$($scriptFile.Name)' konnte nicht gelesen werden: $($_.Exception.Message)"
                 }
-                
+
                 $button.Content = $buttonContent
-                
+
                 $button.Add_Click({
                     param($buttonSender)
-                    $scriptPathToExecute = $buttonSender.Tag
-                    $scriptFileName = Split-Path -Leaf $scriptPathToExecute
+                    $scriptPathToExecute = [string]$buttonSender.Tag
+                    $scriptFileName = [System.IO.Path]::GetFileName($scriptPathToExecute)
                     $result = [System.Windows.MessageBox]::Show(
-                        "Do you want to execute the script '$scriptFileName' in the current session?",
-                        "Execute Script",
+                        "Soll das Skript '$scriptFileName' in der aktuellen Sitzung ausgeführt werden?",
+                        "Skript ausführen",
                         [System.Windows.MessageBoxButton]::YesNo,
                         [System.Windows.MessageBoxImage]::Question)
                     if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
                         try {
-                            Update-LogDisplay -Message "Executing script: $scriptPathToExecute" -Type "Info"
+                            Write-GuiLog -Message "Skript wird ausgeführt: $scriptPathToExecute" -Type "Info"
                             [void](Start-MainScript -ScriptPath $scriptPathToExecute -KeepSetupWindowOpen)
                         }
                         catch {
-                            Update-LogDisplay -Message "Error executing script '$scriptFileName': $($_.Exception.Message)" -Type "Error"
-                            [System.Windows.MessageBox]::Show(
-                                "Error executing script '$scriptFileName': $($_.Exception.Message)",
-                                "Script Execution Error",
+                            Write-GuiLog -Message "Fehler beim Ausführen des Skripts '$scriptFileName': $($_.Exception.Message)" -Type "Error"
+                            [void][System.Windows.MessageBox]::Show(
+                                "Fehler beim Ausführen des Skripts '$scriptFileName': $($_.Exception.Message)",
+                                "Fehler bei der Skriptausführung",
                                 [System.Windows.MessageBoxButton]::OK,
                                 [System.Windows.MessageBoxImage]::Error)
                         }
@@ -1182,58 +1392,63 @@ function Update-ScriptList {
                 [void]$spScriptList.Children.Add($button)
             }
         }
-        Update-LogDisplay -Message "Script list loaded - $($scripts.Count) scripts found and displayed hierarchically." -Type "Success"
+        Write-GuiLog -Message "Skriptliste geladen - $($scripts.Count) Skripte gefunden und hierarchisch angezeigt." -Type "Success"
     }
     catch {
-        Update-LogDisplay -Message "Critical error while updating script list: $($_.Exception.Message)" -Type "Error"
-        # Consider if re-throwing is appropriate: throw $_
+        Write-GuiLog -Message "Kritischer Fehler beim Aktualisieren der Skriptliste: $($_.Exception.Message)" -Type "Error"
     }
 }
 
-# Vereinfachte Funktion zum Starten des Hauptskripts
+# Startet ein Skript in der aktuellen Sitzung (Hauptfenster bleibt minimiert geöffnet)
 function Start-MainScript {
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([bool])]
     param (
         [string]$ScriptPath,
         [switch]$KeepSetupWindowOpen
     )
-    # Globale GUI-Variablen sichern: gestartete Skripte nutzen oft dieselben Namen ($Global:window, $Global:txtLog, ...)
-    $savedGlobals = @{}
-    foreach ($globalName in (@("window") + $script:guiGlobalNames)) {
-        $existingVar = Get-Variable -Name $globalName -Scope Global -ErrorAction SilentlyContinue
-        if ($existingVar) { $savedGlobals[$globalName] = $existingVar.Value }
+    # Gestartete Skripte laufen in einem eigenen Skript-Scope und überschreiben die $script:-Variablen dieses
+    # Tools daher nicht. Wurde easyPSInfo jedoch per Dot-Sourcing gestartet, ist sein Skript-Scope der globale
+    # Scope - dann könnten $Global:-Zuweisungen des gestarteten Skripts die GUI-Variablen überschreiben.
+    # Deshalb werden die GUI-Variablen weiterhin gesichert und anschließend wiederhergestellt.
+    $savedGuiVariables = @{}
+    foreach ($guiVariableName in (@("window") + $script:guiElementNames)) {
+        $existingVar = Get-Variable -Name $guiVariableName -Scope Script -ErrorAction SilentlyContinue
+        if ($existingVar) { $savedGuiVariables[$guiVariableName] = $existingVar.Value }
     }
-    $mainWindow = $Global:window
+    $mainWindow = $script:window
     $scriptTimer = $null
     try {
         if ([string]::IsNullOrEmpty($ScriptPath) -or -not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
-            Update-LogDisplay -Message "Script not found: $ScriptPath" -Type "Error"
+            Write-GuiLog -Message "Skript nicht gefunden: $ScriptPath" -Type "Error"
             return $false
         }
+        if (-not $PSCmdlet.ShouldProcess($ScriptPath, "Skript ausführen")) { return $false }
         if ($KeepSetupWindowOpen -and $mainWindow) {
-            Update-LogDisplay -Message "Main window stays open to maintain sessions" -Type "Info"
+            Write-GuiLog -Message "Hauptfenster bleibt geöffnet (minimiert), damit bestehende Sitzungen erhalten bleiben." -Type "Info"
             $mainWindow.WindowState = [System.Windows.WindowState]::Minimized
-            $mainWindow.Title = "$($script:WindowTitle) (Script running...)"
+            $mainWindow.Title = "$($script:WindowTitle) (Skript läuft...)"
         }
-        
+
         $scriptTimer = [System.Diagnostics.Stopwatch]::StartNew()
         & $ScriptPath
-        
+
         return $true
     }
     catch {
-        Update-LogDisplay -Message "Error executing script: $($_.Exception.Message)" -Type "Error"
+        Write-GuiLog -Message "Fehler beim Ausführen des Skripts: $($_.Exception.Message)" -Type "Error"
         return $false
     }
     finally {
-        foreach ($globalName in $savedGlobals.Keys) {
-            Set-Variable -Name $globalName -Value $savedGlobals[$globalName] -Scope Global
+        foreach ($guiVariableName in $savedGuiVariables.Keys) {
+            Set-Variable -Name $guiVariableName -Value $savedGuiVariables[$guiVariableName] -Scope Script
         }
 
         if ($scriptTimer) {
             $scriptTimer.Stop()
-            Update-LogDisplay -Message "Script execution time: $($scriptTimer.Elapsed.ToString())" -Type "Info"
+            Write-GuiLog -Message "Ausführungsdauer des Skripts: $($scriptTimer.Elapsed.ToString())" -Type "Info"
         }
-        
+
         if ($KeepSetupWindowOpen -and $mainWindow) {
             $mainWindow.WindowState = [System.Windows.WindowState]::Normal
             $mainWindow.Title = $script:WindowTitle
@@ -1242,82 +1457,94 @@ function Start-MainScript {
 }
 
 # Funktion zum Registrieren der Event-Handler der GUI
-function Register-EventHandlers {
+function Register-EventHandler {
     try {
-        Update-LogDisplay -Message "Registering GUI event handlers..." -Type "Info"
-        
-        # Button events
-        $btnRefreshScripts = $Global:window.FindName("btnRefreshScripts")
+        Write-GuiLog -Message "GUI-Ereignishandler werden registriert..." -Type "Info"
+
+        # Button-Ereignisse
+        $btnRefreshScripts = $script:window.FindName("btnRefreshScripts")
         if ($btnRefreshScripts) {
-            $btnRefreshScripts.Add_Click({ Update-ScriptList })
-            Update-LogDisplay -Message "Script list refresh button event registered." -Type "Info"
+            $btnRefreshScripts.Add_Click({ Show-ScriptList })
+            Write-GuiLog -Message "Ereignis für 'Skriptliste aktualisieren' registriert." -Type "Info"
         }
-        
-        $btnRefreshModules = $Global:window.FindName("btnRefreshModules")
+
+        $btnSelectScriptBase = $script:window.FindName("btnSelectScriptBase")
+        if ($btnSelectScriptBase) {
+            $btnSelectScriptBase.Add_Click({ Select-ScriptSearchBase })
+            Write-GuiLog -Message "Ereignis für 'Ordner wählen…' registriert." -Type "Info"
+        }
+
+        $btnResetScriptBase = $script:window.FindName("btnResetScriptBase")
+        if ($btnResetScriptBase) {
+            $btnResetScriptBase.Add_Click({ Set-ScriptSearchBase -UseDefault })
+            Write-GuiLog -Message "Ereignis für 'Standard' (Basisordner) registriert." -Type "Info"
+        }
+
+        $btnRefreshModules = $script:window.FindName("btnRefreshModules")
         if ($btnRefreshModules) {
-            $btnRefreshModules.Add_Click({ Check-AllModules })
-            Update-LogDisplay -Message "Module list refresh button event registered." -Type "Info"
+            $btnRefreshModules.Add_Click({ Show-ModuleStatus })
+            Write-GuiLog -Message "Ereignis für 'Module aktualisieren' registriert." -Type "Info"
         }
-        
-        $btnRefreshPolicies = $Global:window.FindName("btnRefreshPolicies")
+
+        $btnRefreshPolicies = $script:window.FindName("btnRefreshPolicies")
         if ($btnRefreshPolicies) {
-            $btnRefreshPolicies.Add_Click({ Update-ExecutionPolicyDisplay })
-            Update-LogDisplay -Message "Execution policy refresh button event registered." -Type "Info"
+            $btnRefreshPolicies.Add_Click({ Show-ExecutionPolicy })
+            Write-GuiLog -Message "Ereignis für 'Richtlinien aktualisieren' registriert." -Type "Info"
         }
-        
-        $btnExit = $Global:window.FindName("btnExit")
+
+        $btnExit = $script:window.FindName("btnExit")
         if ($btnExit) {
-            $btnExit.Add_Click({ $Global:window.Close() })
-            Update-LogDisplay -Message "Exit button event registered." -Type "Info"
+            $btnExit.Add_Click({ $script:window.Close() })
+            Write-GuiLog -Message "Ereignis für 'Beenden' registriert." -Type "Info"
         }
-        
-        # Module ListView events
-        $lvModules = $Global:window.FindName("lvModules")
+
+        # Ereignisse der Modul-ListView
+        $lvModules = $script:window.FindName("lvModules")
         if ($lvModules) {
             $lvModules.AddHandler(
-                [System.Windows.Controls.Button]::ClickEvent, 
+                [System.Windows.Controls.Button]::ClickEvent,
                 [System.Windows.RoutedEventHandler]{
                     $button = $_.OriginalSource -as [System.Windows.Controls.Button]
                     if ($button) {
-                        if ($button.Content -eq "Install/Update") {
+                        if ($button.Content -eq "Installieren") {
                             Install-ModuleHandler -buttonSender $button
                         }
-                        elseif ($button.Content -eq "Web Link") {
+                        elseif ($button.Content -eq "Webseite") {
                             $webUrl = $button.Tag.ToString()
                             Open-WebLink -url $webUrl
                         }
                     }
                 }
             )
-            Update-LogDisplay -Message "Module ListView button events registered." -Type "Info"
+            Write-GuiLog -Message "Button-Ereignisse der Modulliste registriert." -Type "Info"
         }
-        
-        # ExecutionPolicy ListView events
-        $lvExecutionPolicies = $Global:window.FindName("lvExecutionPolicies")
+
+        # Ereignisse der ExecutionPolicy-ListView
+        $lvExecutionPolicies = $script:window.FindName("lvExecutionPolicies")
         if ($lvExecutionPolicies) {
             $lvExecutionPolicies.AddHandler(
-                [System.Windows.Controls.Button]::ClickEvent, 
+                [System.Windows.Controls.Button]::ClickEvent,
                 [System.Windows.RoutedEventHandler]{
                     $button = $_.OriginalSource -as [System.Windows.Controls.Button]
                     if ($button) {
                         $scope = $button.Tag.ToString()
                         $policy = $button.Content.ToString()
-                        
-                        # Only allow modification for certain scopes
+
+                        # Änderungen nur für bestimmte Scopes zulassen
                         if ($scope -in @("Process", "CurrentUser", "LocalMachine")) {
-                            Set-ExecutionPolicyHandler -scope $scope -policy $policy
+                            Set-ExecutionPolicyHandler -Scope $scope -Policy $policy
                         }
                         else {
-                            Update-LogDisplay -Message "Cannot modify $scope - controlled by Group Policy." -Type "Warning"
+                            Write-GuiLog -Message "$scope kann nicht geändert werden - wird per Gruppenrichtlinie gesteuert bzw. ist schreibgeschützt." -Type "Warning"
                         }
                     }
                 }
             )
-            Update-LogDisplay -Message "ExecutionPolicy ListView button events registered." -Type "Info"
+            Write-GuiLog -Message "Button-Ereignisse der Richtlinienliste registriert." -Type "Info"
         }
-        
+
         # Hintergrund-Installation beim Schließen sauber beenden
-        $Global:window.Add_Closed({
+        $script:window.Add_Closed({
             if ($script:installTimer) { $script:installTimer.Stop() }
             if ($script:installJob) {
                 try { $script:installJob.PowerShell.Stop(); $script:installJob.PowerShell.Dispose() } catch { Write-Verbose $_.Exception.Message }
@@ -1325,11 +1552,11 @@ function Register-EventHandlers {
             }
         })
 
-        Update-LogDisplay -Message "All event handlers successfully registered." -Type "Success"
+        Write-GuiLog -Message "Alle Ereignishandler erfolgreich registriert." -Type "Success"
         return $true
     }
     catch {
-        Update-LogDisplay -Message "Error registering event handlers: $($_.Exception.Message)" -Type "Error"
+        Write-GuiLog -Message "Fehler beim Registrieren der Ereignishandler: $($_.Exception.Message)" -Type "Error"
         return $false
     }
 }
@@ -1337,34 +1564,41 @@ function Register-EventHandlers {
 # Hauptblock zur Initialisierung und Anzeige der GUI
 # WPF benötigt einen STA-Thread (Standard in powershell.exe/pwsh.exe, nicht bei -MTA)
 if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Threading.ApartmentState]::STA) {
-    Write-Log "WPF requires STA mode. Please start with: powershell.exe -STA -File `"$($script:ScriptPath)`"" -Type "Error"
+    Write-AppLog "WPF erfordert den STA-Modus. Bitte starten mit: powershell.exe -STA -File `"$($script:ScriptPath)`"" -Type "Error"
     return
 }
 
 try {
-    Write-Log "Starting $($script:AppName) v$($script:AppVersion) (PowerShell $($PSVersionTable.PSVersion))..." -Type "Info"
-    
-    # GUI laden
-    $Global:window = Import-XamlGui
-    if (-not $Global:window) { throw "GUI konnte nicht geladen werden." }
-    $script:WindowTitle = $Global:window.Title
-    
-    # Module prüfen
-    Check-AllModules
-    
-    # ExecutionPolicy anzeigen
-    Update-ExecutionPolicyDisplay
-    
-    # Skriptliste laden
-    Update-ScriptList
-    
-    # Event-Handler registrieren
-    [void](Register-EventHandlers)
+    Write-AppLog "$($script:AppName) v$($script:AppVersion) wird gestartet (PowerShell $($PSVersionTable.PSVersion))..." -Type "Info"
 
-    Write-Log "GUI erfolgreich initialisiert und Event-Handler registriert." -Type "Success"
-    
+    # GUI laden
+    $script:window = Import-XamlGui
+    if (-not $script:window) { throw "GUI konnte nicht geladen werden." }
+    $script:WindowTitle = $script:window.Title
+
+    # Module prüfen
+    Show-ModuleStatus
+
+    # ExecutionPolicy anzeigen
+    Show-ExecutionPolicy
+
+    # Basisordner der Skriptsuche festlegen (gespeicherte Auswahl oder Standard) und Skriptliste laden
+    $savedScriptBase = Get-SavedScriptSearchBase
+    if ($savedScriptBase) {
+        Set-ScriptSearchBase -Path $savedScriptBase -NoSave -NoRefresh
+    }
+    else {
+        Set-ScriptSearchBase -UseDefault -NoSave -NoRefresh
+    }
+    Show-ScriptList
+
+    # Event-Handler registrieren
+    [void](Register-EventHandler)
+
+    Write-AppLog "GUI erfolgreich initialisiert und Event-Handler registriert." -Type "Success"
+
     # GUI anzeigen
-    [void]$Global:window.ShowDialog()
+    [void]$script:window.ShowDialog()
 }
 catch {
     $exception = $_
@@ -1373,7 +1607,7 @@ catch {
 
     # Allgemeine Fehlerbehandlung
     $lineNumber = $exception.InvocationInfo.ScriptLineNumber
-    Write-Log -Message "Fehler bei der Ausführung von $($script:AppName) (Zeile $lineNumber): $errorMessage. FullError: $fullStackTrace" -Type "Error"
+    Write-AppLog -Message "Fehler bei der Ausführung von $($script:AppName) (Zeile $lineNumber): $errorMessage. Details: $fullStackTrace" -Type "Error"
     [void][System.Windows.MessageBox]::Show("Ein unerwarteter Fehler ist aufgetreten: $errorMessage`nDetails finden Sie in den Protokollen ($($script:logFile)).", "$($script:AppName) - Fehler", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
 }
 

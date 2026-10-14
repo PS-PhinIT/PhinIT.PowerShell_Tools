@@ -1,43 +1,42 @@
-﻿# ============================================ 
-# Version:     0.0.3 
-# Autor:       Andreas Hepp | PhinIT (www.phinit.de) 
-# ============================================ 
- 
-#requires -Version 5.0 
-#requires -Modules ActiveDirectory 
- 
-<# 
-.SYNOPSIS 
-    Erstellt Active Directory Dummy-Benutzer basierend auf einer CSV-Datei. 
-.DESCRIPTION 
-    Ein PowerShell-Skript mit WPF-GUI zum Einlesen einer CSV-Datei und zum Erstellen von AD-Benutzern. 
-    Ermöglicht die Auswahl der zu verwendenden Attribute und bietet Platzhalter für weitere AD-Verwaltungsfunktionen.
-    
-    Features:
-    - WPF-GUI für benutzerfreundliche Bedienung
-    - CSV-Import mit konfigurierbaren Attributzuordnungen
-    - Automatische UPN-Generierung
-    - OU-Dropdown mit AD-Integration
-    - Fortschrittsanzeige für längere Operationen
-    - Umfassende Logging-Funktionalität
-    - Sicherheitsfunktionen für kritische AD-Operationen 
-.NOTES 
-    Version: 0.0.3
+﻿# ============================================
+# Version:     0.0.4
+# Autor:       Andreas Hepp | PhinIT (www.phinit.de)
+# ============================================
+
+#requires -Version 5.0
+#requires -Modules ActiveDirectory
+
+<#
+.SYNOPSIS
+    Erstellt Active-Directory-Testobjekte (Benutzer, Gruppen, OUs, Computer, Dienstkonten, Drucker) für Testumgebungen.
+.DESCRIPTION
+    Ein PowerShell-Skript mit WPF-GUI zum Erstellen und Bereinigen von AD-Testdaten.
+    Alle Funktionen sind über die Oberfläche erreichbar; erstellte Objekte werden pro Sitzung nachverfolgt
+    und können über die Lösch- bzw. Bereinigungsfunktionen wieder entfernt werden.
+
+    Funktionen:
+    - CSV-Import mit konfigurierbaren Attributzuordnungen und nachträglichem Befüllen von Attributen
+    - Zufallsbenutzer, Benutzer aus Vorlage, Zufallsattribute, Profilbilder (thumbnailPhoto), Anmeldezeiten
+    - Gruppen (automatisch, verschachtelt), OU-Strukturvorlagen nach Firmengröße
+    - Computer, Dienstkonten, Drucker (printQueue), simulierte BitLocker- und LAPS-Daten
+    - Testdaten-Sets, Chaos-Modus, Performance-Test, Kennwortrichtlinien, RBAC-Rollen
+    - Export der erstellten Objekte, Protokollierung, Bestätigungsdialoge für kritische Operationen
+.NOTES
+    Version: 0.0.4
     Autor:   Andreas Hepp | PhinIT (www.phinit.de)
-    Stellen Sie sicher, dass das ActiveDirectory PowerShell-Modul installiert ist und Sie über die erforderlichen Berechtigungen verfügen. 
+    Stellen Sie sicher, dass das ActiveDirectory PowerShell-Modul installiert ist und Sie über die erforderlichen Berechtigungen verfügen.
     Logdatei: <Skriptordner>\Logs\easyADDummyUserCreator.log
     Exporte:  <Skriptordner>\Exports\
     Passwörter: Es wird kein Standardpasswort mehr ausgeliefert. Für CSV-Benutzer kann im GUI ein Initial-Passwort
     eingegeben werden; bleibt das Feld leer, erhält jeder Benutzer ein eigenes, kryptografisch zufälliges Passwort.
     Passwörter werden niemals in die Logdatei geschrieben.
-#> 
- 
-#region Globale Variablen und Konfiguration 
-Add-Type -AssemblyName PresentationFramework 
-Add-Type -AssemblyName PresentationCore 
-Add-Type -AssemblyName WindowsBase 
-Add-Type -AssemblyName Microsoft.VisualBasic
- 
+#>
+
+#region Skriptweite Variablen und Konfiguration
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+
 # Basisverzeichnis des Skripts (unabhängig vom aktuellen Arbeitsverzeichnis)
 $scriptRootPath = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
     $PSScriptRoot
@@ -47,32 +46,35 @@ $scriptRootPath = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
     (Get-Location).ProviderPath
 }
 
-$Global:AppConfig = @{ 
-    AppName                = "easy DC Dummy Object Creator" 
-    ScriptVersion          = "0.0.3" 
-    Author                 = "Andreas Hepp  |  www.phinit.de" 
+$script:AppConfig = @{
+    AppName                = "easy DC Dummy Object Creator"
+    ScriptVersion          = "0.0.4"
+    Author                 = "Andreas Hepp  |  www.phinit.de"
     ScriptRoot             = $scriptRootPath
-    DefaultCsvPath         = (Join-Path $scriptRootPath "AD_DummyUserList.csv") # Standardpfad, kann im GUI geändert werden 
+    DefaultCsvPath         = (Join-Path $scriptRootPath "AD_DummyUserList.csv") # Standardpfad, kann im GUI geändert werden
     EnablePasswordChange   = $true                     # Benutzer muss Passwort bei nächster Anmeldung ändern
     LogDirectory           = (Join-Path $scriptRootPath "Logs")
     LogFilePath            = (Join-Path (Join-Path $scriptRootPath "Logs") "easyADDummyUserCreator.log") # Pfad für Logdatei
     ExportDirectory        = (Join-Path $scriptRootPath "Exports") # Zielordner für Exporte/Berichte
-} 
-$Global:IsBusy = $false
+}
+$script:IsBusy = $false
 $script:CryptoRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-$script:DomainInfoCache = $null 
- 
-$Global:Window = $null 
-$Global:GuiControls = @{} 
-$Global:CsvData = $null 
-$Global:CreatedUsers = [System.Collections.Generic.List[object]]::new() 
-$Global:CreatedGroups = [System.Collections.Generic.List[object]]::new() 
-$Global:CreatedComputers = [System.Collections.Generic.List[object]]::new() 
-$Global:CreatedOUs = [System.Collections.Generic.List[object]]::new() 
-$Global:CreatedServiceAccounts = [System.Collections.Generic.List[object]]::new()
+$script:DomainInfoCache = $null
+
+$script:Window = $null
+$script:GuiControls = @{}
+$script:CsvData = $null
+$script:CreatedUsers = [System.Collections.Generic.List[object]]::new()
+$script:CreatedGroups = [System.Collections.Generic.List[object]]::new()
+$script:CreatedComputers = [System.Collections.Generic.List[object]]::new()
+$script:CreatedOUs = [System.Collections.Generic.List[object]]::new()
+$script:CreatedServiceAccounts = [System.Collections.Generic.List[object]]::new()
+$script:CreatedPrinters = [System.Collections.Generic.List[object]]::new() # DistinguishedNames der printQueue-Objekte
+# Benutzer des letzten Laufs von 'Benutzer aus CSV erstellen' (SamAccountName + CSV-Zeile) - Grundlage für 'Attribute befüllen'
+$script:LastCsvImportUsers = [System.Collections.Generic.List[object]]::new()
 
 # AD Attribute Mapping Konfiguration
-$Global:SelectableADAttributes = @(
+$script:SelectableADAttributes = @(
     @{Name="SamAccountName"; CsvHeader="SamAccountName"; Required=$true}
     @{Name="GivenName"; CsvHeader="FirstName"; Required=$false}
     @{Name="Surname"; CsvHeader="LastName"; Required=$false}
@@ -103,7 +105,7 @@ $Global:SelectableADAttributes = @(
 )
 
 # Zuordnung New-ADUser-Parametername -> LDAP-Attributname (für Set-ADUser -Replace / -OtherAttributes)
-$Global:ADAttributeLdapNames = @{
+$script:ADAttributeLdapNames = @{
     GivenName         = 'givenName'
     Surname           = 'sn'
     DisplayName       = 'displayName'
@@ -133,18 +135,18 @@ $Global:ADAttributeLdapNames = @{
 }
 
 # Attribute ohne eigenen New-ADUser-Parameter (werden über -OtherAttributes gesetzt)
-$Global:ADUserOtherAttributeNames = @('proxyAddresses', 'EmployeeType')
-#endregion 
- 
-#region XAML Definition 
-$XAML = @" 
+$script:ADUserOtherAttributeNames = @('proxyAddresses', 'EmployeeType')
+#endregion
+
+#region XAML Definition
+$XAML = @"
 <Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:sys="clr-namespace:System;assembly=mscorlib"
-    Title="$($Global:AppConfig.AppName) v$($Global:AppConfig.ScriptVersion)"
+    Title="$($script:AppConfig.AppName) v$($script:AppConfig.ScriptVersion)"
     Width="1800"
     Height="1000"
     MinWidth="1000"
@@ -434,11 +436,11 @@ $XAML = @"
                             FontSize="16"
                             FontWeight="SemiBold"
                             Foreground="{StaticResource TextPrimaryBrush}"
-                            Text="$($Global:AppConfig.AppName)" />
+                            Text="$($script:AppConfig.AppName)" />
                         <TextBlock
                             FontSize="11"
                             Foreground="{StaticResource TextSecondaryBrush}"
-                            Text="Dummy Active Directory User Management" />
+                            Text="Active-Directory-Testobjekte erstellen und verwalten" />
                     </StackPanel>
                 </StackPanel>
                 <StackPanel
@@ -454,7 +456,7 @@ $XAML = @"
                             FontSize="10"
                             FontWeight="Medium"
                             Foreground="White"
-                            Text="v$($Global:AppConfig.ScriptVersion)" />
+                            Text="v$($script:AppConfig.ScriptVersion)" />
                     </Border>
                 </StackPanel>
             </Grid>
@@ -486,7 +488,8 @@ $XAML = @"
                                     x:Name="TextBoxCompanyName"
                                     Grid.Column="1"
                                     Height="39"
-                                    Margin="10,0,491,0" />
+                                    Margin="10,0,491,0"
+                                    ToolTip="Name der Wurzel-OU für Test-Umgebung und OU-Struktur (leer = TestCompany) und Wert des Firmenattributs bei Zufallsbenutzern (leer = Testfirma)" />
                                 <Button
                                     x:Name="ButtonCreateTestEnvironment"
                                     Grid.Column="1"
@@ -503,7 +506,7 @@ $XAML = @"
                                     VerticalAlignment="Center"
                                     FontSize="9"
                                     Foreground="{StaticResource TextSecondaryBrush}"
-                                    TextWrapping="Wrap"><Run Text="OU=TestCompany" /><Run Text=" mit " /><Run Text="Unter-OUs: " /><LineBreak /><Run Text="USERS, GROUPS, COMPUTERS, SERVICES, RESOURCES" /></TextBlock>
+                                    TextWrapping="Wrap"><Run Text="OU=&lt;Firmenname&gt;" /><Run Text=" mit " /><Run Text="Unter-OUs: " /><LineBreak /><Run Text="USERS, GROUPS, COMPUTERS, SERVICES, RESOURCES" /></TextBlock>
                             </Grid>
                         </StackPanel>
                     </GroupBox>
@@ -527,7 +530,7 @@ $XAML = @"
                                     Grid.Row="1"
                                     Grid.Column="0"
                                     Margin="25,0,25,0"
-                                    Text="$($Global:AppConfig.DefaultCsvPath)" />
+                                    Text="$($script:AppConfig.DefaultCsvPath)" />
                                 <Button
                                     x:Name="ButtonBrowseCsv"
                                     Grid.Row="1"
@@ -617,7 +620,7 @@ $XAML = @"
                                     Grid.Column="1"
                                     Margin="0,0,10,0"
                                     VerticalAlignment="Top"
-                                    ToolTip="Leer = Alle User aus CSV" />
+                                    ToolTip="Leer = alle Benutzer aus der CSV" />
                             </Grid>
 
                             <Grid Grid.Row="2" Margin="0,4,0,0">
@@ -631,7 +634,7 @@ $XAML = @"
                                     Grid.Column="1"
                                     Margin="0,0,10,0"
                                     VerticalAlignment="Top"
-                                    ToolTip="Optional: Initial-Passwort für CSV-Benutzer. Leer = zufälliges, sicheres Passwort pro Benutzer (wird nicht gespeichert/protokolliert)" />
+                                    ToolTip="Optional: Initial-Passwort für alle neu erstellten Benutzer (CSV, Zufall, Vorlage, Performance-Test). Leer = zufälliges, sicheres Passwort pro Benutzer (wird nicht gespeichert/protokolliert)" />
                             </Grid>
 
                             <Label
@@ -653,7 +656,7 @@ $XAML = @"
                             </ScrollViewer>
                         </Grid>
                     </Expander>
-                    <Expander Header="🔧 CSV-Benutzer verwalten" IsExpanded="False">
+                    <Expander Header="🔧 Erstellte Benutzer verwalten" IsExpanded="False">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -674,7 +677,7 @@ $XAML = @"
                                 Grid.ColumnSpan="2"
                                 Margin="53,0,10,0"
                                 VerticalAlignment="Top"
-                                ToolTip="Leer = Alle erstellten Benutzer" />
+                                ToolTip="Anzahl der zuerst erstellten Benutzer dieser Sitzung (CSV, Zufall, Vorlage, Performance-Test). Leer = alle." />
 
                             <Grid
                                 Grid.Row="1"
@@ -690,13 +693,15 @@ $XAML = @"
                                     Grid.Column="0"
                                     Margin="10,0,2,0"
                                     Content="🚫 Deaktivieren"
-                                    Style="{StaticResource WarningButton}" />
+                                    Style="{StaticResource WarningButton}"
+                                    ToolTip="Deaktiviert die in dieser Sitzung erstellten Benutzer (Anzahl siehe oben)" />
                                 <Button
                                     x:Name="ButtonDeleteUsers"
                                     Grid.Column="1"
                                     Margin="2,0,10,0"
                                     Content="🗑️ Löschen"
-                                    Style="{StaticResource DangerButton}" />
+                                    Style="{StaticResource DangerButton}"
+                                    ToolTip="Löscht die in dieser Sitzung erstellten Benutzer (Anzahl siehe oben) unwiderruflich" />
                             </Grid>
                         </Grid>
                     </Expander>
@@ -722,7 +727,7 @@ $XAML = @"
                                 Margin="0,0,4,0"
                                 Content="📝 Attribute befüllen"
                                 Style="{StaticResource ModernButton}"
-                                ToolTip="Aktualisiert Attribute bestehender Benutzer" />
+                                ToolTip="Überschreibt die ausgewählten Attribute der Benutzer, die beim LETZTEN Lauf von 'Benutzer aus CSV erstellen' angelegt wurden, mit den Werten der aktuell geladenen CSV (gleiche Zeile). Ein neuer CSV-Import ersetzt diese Liste; zufällig oder per Vorlage erstellte Benutzer werden nicht berücksichtigt." />
                             <Button
                                 x:Name="ButtonExportCreatedUsers"
                                 Grid.Column="3"
@@ -748,7 +753,6 @@ $XAML = @"
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <!--  Schnell-Erstellung  -->
@@ -760,9 +764,9 @@ $XAML = @"
                                     <Button
                                         x:Name="ButtonQuickRandomUsers"
                                         Margin="3"
-                                        Content="👥 Random User"
+                                        Content="👥 Zufallsbenutzer"
                                         Style="{StaticResource SuccessButton}"
-                                        ToolTip="Erstellt zufällige Test-Benutzer" />
+                                        ToolTip="Erstellt zufällige Test-Benutzer (Einstellungen unter 'Zufallsbenutzer erstellen')" />
                                     <Button
                                         x:Name="ButtonQuickCreateGroups"
                                         Margin="3"
@@ -780,7 +784,7 @@ $XAML = @"
                                         Margin="3"
                                         Content="🧹 Alles löschen"
                                         Style="{StaticResource DangerButton}"
-                                        ToolTip="Löscht ALLE erstellten Objekte" />
+                                        ToolTip="Löscht alle in dieser Sitzung erstellten Gruppen, Computer, Dienstkonten, Drucker und Test-OUs (USERS, GROUPS, COMPUTERS, SERVICES, RESOURCES). Benutzer werden nur mit entfernt, wenn sie in einer gelöschten Test-OU liegen; OUs aus der OU-Struktur bleiben erhalten (→ 🗑️ OUs)." />
                                 </UniformGrid>
                             </GroupBox>
 
@@ -799,7 +803,7 @@ $XAML = @"
                                     <UniformGrid
                                         Grid.Row="0"
                                         Margin="0,0,0,4"
-                                        Columns="2"
+                                        Columns="3"
                                         Rows="2">
                                         <Button
                                             x:Name="ButtonDeleteGroups"
@@ -822,9 +826,15 @@ $XAML = @"
                                         <Button
                                             x:Name="ButtonDeleteServiceAccounts"
                                             Margin="2"
-                                            Content="🗑️ Services"
+                                            Content="🗑️ Dienstkonten"
                                             Style="{StaticResource SmallButton}"
-                                            ToolTip="Löscht alle Service Accounts" />
+                                            ToolTip="Löscht alle erstellten Dienstkonten" />
+                                        <Button
+                                            x:Name="ButtonDeletePrinters"
+                                            Margin="2"
+                                            Content="🗑️ Drucker"
+                                            Style="{StaticResource SmallButton}"
+                                            ToolTip="Löscht alle erstellten Drucker-Objekte (printQueue)" />
                                     </UniformGrid>
 
                                     <!--  Export Button  -->
@@ -837,30 +847,6 @@ $XAML = @"
                                 </Grid>
                             </GroupBox>
 
-                            <!--  Progress für Schnellzugriff  -->
-                            <Grid
-                                x:Name="GridQuickProgress"
-                                Grid.Row="2"
-                                Visibility="Collapsed">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <TextBlock
-                                    x:Name="TextBlockQuickStatus"
-                                    Grid.Row="0"
-                                    HorizontalAlignment="Center"
-                                    FontSize="11"
-                                    Foreground="{StaticResource TextSecondaryBrush}"
-                                    Text="Verarbeitung..." />
-                                <ProgressBar
-                                    x:Name="ProgressBarQuick"
-                                    Grid.Row="1"
-                                    Height="6"
-                                    Margin="0,2,0,0"
-                                    Background="{StaticResource SurfaceBrush}"
-                                    Foreground="{StaticResource SuccessBrush}" />
-                            </Grid>
                         </Grid>
                     </GroupBox>
 
@@ -931,6 +917,7 @@ $XAML = @"
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
 
                                 <Border
@@ -957,7 +944,7 @@ $XAML = @"
                                     Background="{StaticResource SurfaceBrush}"
                                     CornerRadius="4">
                                     <StackPanel HorizontalAlignment="Center">
-                                        <TextBlock FontSize="12" Text="⚙️ Services" />
+                                        <TextBlock FontSize="12" Text="⚙️ Dienstkonten" />
                                         <TextBlock
                                             x:Name="TextBlockServiceCount"
                                             HorizontalAlignment="Center"
@@ -969,6 +956,23 @@ $XAML = @"
 
                                 <Border
                                     Grid.Column="2"
+                                    Margin="2"
+                                    Padding="4"
+                                    Background="{StaticResource SurfaceBrush}"
+                                    CornerRadius="4">
+                                    <StackPanel HorizontalAlignment="Center">
+                                        <TextBlock FontSize="12" Text="🖨️ Drucker" />
+                                        <TextBlock
+                                            x:Name="TextBlockPrinterCount"
+                                            HorizontalAlignment="Center"
+                                            FontSize="16"
+                                            FontWeight="Bold"
+                                            Text="0" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border
+                                    Grid.Column="3"
                                     Margin="2"
                                     Padding="4"
                                     Background="{StaticResource SurfaceBrush}"
@@ -988,10 +992,10 @@ $XAML = @"
                     </GroupBox>
 
                     <!--  1. Random Benutzer-Erstellung (Hauptbereich)  -->
-                    <Expander Header="🎲 Random Benutzer-Erstellung" IsExpanded="False">
+                    <Expander Header="🎲 Zufallsbenutzer erstellen" IsExpanded="False">
                         <StackPanel>
-                            <!--  Random User Einstellungen  -->
-                            <GroupBox Margin="0,0,0,8" Header="⚙️ Random-Benutzer Einstellungen">
+                            <!--  Zufallsbenutzer: Einstellungen  -->
+                            <GroupBox Margin="0,0,0,8" Header="⚙️ Einstellungen für Zufallsbenutzer">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -1011,7 +1015,7 @@ $XAML = @"
                                             x:Name="TextBoxRandomUserCount"
                                             Grid.Column="1"
                                             Text="50"
-                                            ToolTip="Anzahl der zu erstellenden Random-Benutzer" />
+                                            ToolTip="Anzahl der zu erstellenden Zufallsbenutzer" />
                                     </Grid>
 
                                     <Label
@@ -1057,7 +1061,10 @@ $XAML = @"
                                         Grid.Row="3"
                                         Margin="0,4,0,0"
                                         Content="Passwort-Komplexität:" />
-                                    <ComboBox x:Name="ComboBoxPasswordComplexity" Grid.Row="4">
+                                    <ComboBox
+                                        x:Name="ComboBoxPasswordComplexity"
+                                        Grid.Row="4"
+                                        ToolTip="Länge/Komplexität der zufälligen Initialpasswörter. Wird ignoriert, wenn im CSV-Bereich ein Initial-Passwort eingegeben ist. Passwörter werden weder gespeichert noch protokolliert.">
                                         <ComboBoxItem Content="Einfach (8 Zeichen)" />
                                         <ComboBoxItem Content="Mittel (12 Zeichen + Symbole)" IsSelected="True" />
                                         <ComboBoxItem Content="Komplex (16 Zeichen + Spezial)" />
@@ -1066,14 +1073,14 @@ $XAML = @"
                                 </Grid>
                             </GroupBox>
 
-                            <!--  Random User Actions  -->
-                            <GroupBox Margin="0,0,0,8" Header="🚀 Random-Benutzer Aktionen">
+                            <!--  Zufallsbenutzer: Aktionen  -->
+                            <GroupBox Margin="0,0,0,8" Header="🚀 Zufallsbenutzer anlegen">
                                 <StackPanel>
                                     <Button
                                         x:Name="ButtonCreateRandomUsers"
-                                        Content="👥 Random Benutzer erstellen"
+                                        Content="👥 Zufallsbenutzer erstellen"
                                         Style="{StaticResource SuccessButton}"
-                                        ToolTip="Erstellt zufällige Benutzer in der Test-Umgebung" />
+                                        ToolTip="Erstellt zufällige Benutzer in der Test-OU (USERS) unterhalb der Ziel-OU. Passwort: das Initial-Passwort aus dem CSV-Bereich oder ein zufälliges Passwort je Benutzer (nicht gespeichert)." />
                                     <Grid Margin="0,4,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -1095,25 +1102,93 @@ $XAML = @"
                                         Margin="0,2,0,0"
                                         Content="Mehrdeutige Zeichen vermeiden (0/O, 1/l)"
                                         IsChecked="True" />
+                                    <CheckBox
+                                        x:Name="CheckBoxSetExpiryDate"
+                                        Margin="0,2,0,0"
+                                        Content="Zufälliges Kontoablaufdatum (30–365 Tage)"
+                                        ToolTip="Setzt für jeden neuen Benutzer ein zufälliges Kontoablaufdatum zwischen 30 und 365 Tagen in der Zukunft" />
+                                    <CheckBox
+                                        x:Name="CheckBoxTemporaryAccount"
+                                        Margin="0,2,0,0"
+                                        Content="Als temporäre Konten anlegen (Ablauf in 30 Tagen)"
+                                        ToolTip="Kontoablaufdatum = heute + 30 Tage (hat Vorrang vor dem zufälligen Ablaufdatum)" />
                                 </StackPanel>
                             </GroupBox>
 
-                            <!--  Erweiterte Random-Optionen  -->
-                            <GroupBox Margin="0,0,0,8" Header="🎯 Erweiterte Optionen">
+                            <!--  Erstellte Benutzer anpassen  -->
+                            <GroupBox Margin="0,0,0,8" Header="🎯 Erstellte Benutzer anpassen">
                                 <StackPanel>
-                                    <CheckBox x:Name="CheckBoxGenerateAvatars" Content="Automatisch Avatare generieren" />
-                                    <CheckBox x:Name="CheckBoxSetExpiryDate" Content="Ablaufdatum setzen" />
-                                    <CheckBox x:Name="CheckBoxTemporaryAccount" Content="Als temporäre Accounts (30 Tage)" />
                                     <Button
                                         x:Name="ButtonGenerateRandomData"
-                                        Margin="0,4,0,0"
-                                        Content="📊 Nur Daten generieren (CSV)"
+                                        Content="📊 Zufallsattribute zuweisen"
                                         Style="{StaticResource SecondaryButton}"
-                                        ToolTip="Generiert Random-Daten und exportiert sie als CSV" />
+                                        ToolTip="Überschreibt bei allen vom Tool erstellten Benutzern die oben ausgewählten Attribute (Namen, Adressen, Telefon, Abteilung, Titel, Firma) mit neuen Zufallswerten" />
+                                    <CheckBox
+                                        x:Name="CheckBoxGenerateAvatars"
+                                        Margin="0,6,0,0"
+                                        Content="Avatare automatisch generieren (Initialen)"
+                                        IsChecked="True"
+                                        ToolTip="Aktiviert: Es werden Initialen-Avatare erzeugt. Deaktiviert: Es werden JPG-Bilder aus dem gewählten Ordner verwendet." />
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox
+                                            x:Name="TextBoxAvatarPath"
+                                            Grid.Column="0"
+                                            ToolTip="Ordner mit JPG-Bildern (max. 100 KB je Bild) für das Attribut thumbnailPhoto" />
+                                        <Button
+                                            x:Name="ButtonBrowseAvatars"
+                                            Grid.Column="1"
+                                            Margin="4,0,0,0"
+                                            Content="📁"
+                                            Style="{StaticResource SmallButton}"
+                                            ToolTip="Ordner mit Avatar-Bildern auswählen" />
+                                    </Grid>
+                                    <Button
+                                        x:Name="ButtonAssignAvatars"
+                                        Margin="0,4,0,0"
+                                        Content="🖼️ Avatare zuweisen"
+                                        Style="{StaticResource ModernButton}"
+                                        ToolTip="Setzt thumbnailPhoto bei allen vom Tool erstellten Benutzern (generierte Initialen-Avatare oder Bilder aus dem Ordner)" />
                                 </StackPanel>
                             </GroupBox>
 
-
+                            <!--  Benutzer aus Vorlage  -->
+                            <GroupBox Margin="0,0,0,8" Header="📋 Benutzer aus Vorlage">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Label Grid.Column="0" Content="Vorlage (sAMAccountName):" />
+                                        <TextBox
+                                            x:Name="TextBoxTemplateUser"
+                                            Grid.Column="1"
+                                            ToolTip="Anmeldename eines bestehenden Benutzers, dessen Abteilung, Firma, Titel, Adresse und Gruppenmitgliedschaften übernommen werden (keine privilegierten Gruppen)" />
+                                    </Grid>
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Label Grid.Column="0" Content="Anzahl:" />
+                                        <TextBox
+                                            x:Name="TextBoxTemplateCount"
+                                            Grid.Column="1"
+                                            Text="5"
+                                            ToolTip="Anzahl der zu erstellenden Benutzer (1–500)" />
+                                    </Grid>
+                                    <Button
+                                        x:Name="ButtonCreateFromTemplate"
+                                        Margin="0,4,0,0"
+                                        Content="📋 Benutzer aus Vorlage erstellen"
+                                        Style="{StaticResource SuccessButton}"
+                                        ToolTip="Erstellt Benutzer mit zufälligen Namen und den Attributen der Vorlage in der Test-OU (USERS). Passwort: Feld 'Initial-Passwort' oder zufälliges Passwort je Benutzer (nicht gespeichert)." />
+                                </StackPanel>
+                            </GroupBox>
                         </StackPanel>
                     </Expander>
 
@@ -1141,14 +1216,38 @@ $XAML = @"
                                 <StackPanel>
                                     <ComboBox x:Name="ComboBoxGroupHierarchy">
                                         <ComboBoxItem Content="Flache Struktur" IsSelected="True" />
-                                        <ComboBoxItem Content="2-Level Hierarchie" />
-                                        <ComboBoxItem Content="3-Level Hierarchie" />
+                                        <ComboBoxItem Content="2-stufige Hierarchie" />
+                                        <ComboBoxItem Content="3-stufige Hierarchie" />
+                                        <ComboBoxItem Content="Vollständige Hierarchie" />
                                     </ComboBox>
+                                    <CheckBox
+                                        x:Name="CheckBoxNestedSecurity"
+                                        Margin="0,4,0,0"
+                                        Content="Als Sicherheitsgruppen anlegen (sonst Verteilergruppen)"
+                                        IsChecked="True" />
                                     <Button
                                         x:Name="ButtonCreateNestedGroups"
                                         Margin="0,4,0,0"
                                         Content="🔗 Hierarchie erstellen"
-                                        Style="{StaticResource ModernButton}" />
+                                        Style="{StaticResource ModernButton}"
+                                        ToolTip="Erstellt verschachtelte Test-Gruppen in der Test-OU (GROUPS). 'Vollständige Hierarchie' = 5 Ebenen (Region → Land → Stadt → Abteilung → Team)." />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Margin="0,0,0,8" Header="🏗️ OU-Struktur">
+                                <StackPanel>
+                                    <ComboBox x:Name="ComboBoxOUStructure" ToolTip="Vorlage für die OU-Struktur">
+                                        <ComboBoxItem Content="Kleine Firma (unter 50 MA)" IsSelected="True" />
+                                        <ComboBoxItem Content="Mittlere Firma (50-500 MA)" />
+                                        <ComboBoxItem Content="Große Firma (500+ MA)" />
+                                        <ComboBoxItem Content="Konzern (Multi-Standort)" />
+                                    </ComboBox>
+                                    <Button
+                                        x:Name="ButtonCreateOUStructure"
+                                        Margin="0,4,0,0"
+                                        Content="🏗️ OU-Struktur erstellen"
+                                        Style="{StaticResource ModernButton}"
+                                        ToolTip="Erstellt eine verschachtelte OU-Struktur unterhalb der Ziel-OU (ohne Löschschutz, damit 'OUs löschen' sie wieder entfernen kann)" />
                                 </StackPanel>
                             </GroupBox>
                         </StackPanel>
@@ -1171,10 +1270,10 @@ $XAML = @"
                                             Text="20" />
                                     </Grid>
                                     <ComboBox x:Name="ComboBoxComputerType" Margin="0,4,0,0">
-                                        <ComboBoxItem Content="Workstations" IsSelected="True" />
-                                        <ComboBoxItem Content="Laptops" />
+                                        <ComboBoxItem Content="Arbeitsplatzrechner" IsSelected="True" />
+                                        <ComboBoxItem Content="Notebooks" />
                                         <ComboBoxItem Content="Server" />
-                                        <ComboBoxItem Content="Virtual Machines" />
+                                        <ComboBoxItem Content="Virtuelle Maschinen" />
                                     </ComboBox>
                                     <CheckBox
                                         x:Name="CheckBoxRandomComputerNames"
@@ -1185,17 +1284,19 @@ $XAML = @"
                                         x:Name="ButtonCreateComputers"
                                         Margin="0,4,0,0"
                                         Content="💻 Computer erstellen"
-                                        Style="{StaticResource SuccessButton}" />
+                                        Style="{StaticResource SuccessButton}"
+                                        ToolTip="Erstellt Computerkonten des gewählten Typs in der Test-OU (COMPUTERS)" />
                                 </StackPanel>
                             </GroupBox>
 
-                            <GroupBox Margin="0,0,0,8" Header="⚙️ Service Accounts">
+                            <GroupBox Margin="0,0,0,8" Header="⚙️ Dienstkonten">
                                 <StackPanel>
                                     <ComboBox x:Name="ComboBoxServiceType">
-                                        <ComboBoxItem Content="SQL Server Service" IsSelected="True" />
-                                        <ComboBoxItem Content="IIS Application Pool" />
-                                        <ComboBoxItem Content="Windows Service" />
-                                        <ComboBoxItem Content="Scheduled Task" />
+                                        <ComboBoxItem Content="SQL-Server-Dienst" IsSelected="True" />
+                                        <ComboBoxItem Content="IIS-Anwendungspool" />
+                                        <ComboBoxItem Content="Windows-Dienst" />
+                                        <ComboBoxItem Content="Geplante Aufgabe" />
+                                        <ComboBoxItem Content="Eigene Anwendung" />
                                     </ComboBox>
                                     <Grid Margin="0,4,0,0">
                                         <Grid.ColumnDefinitions>
@@ -1211,8 +1312,37 @@ $XAML = @"
                                     <Button
                                         x:Name="ButtonCreateServiceAccounts"
                                         Margin="0,4,0,0"
-                                        Content="⚙️ Service Accounts erstellen"
-                                        Style="{StaticResource ModernButton}" />
+                                        Content="⚙️ Dienstkonten erstellen"
+                                        Style="{StaticResource ModernButton}"
+                                        ToolTip="Erstellt Dienstkonten des gewählten Typs in der Test-OU (SERVICES)" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Margin="0,0,0,8" Header="🖨️ Drucker (printQueue)">
+                                <StackPanel>
+                                    <ComboBox x:Name="ComboBoxPrinterType">
+                                        <ComboBoxItem Content="Netzwerkdrucker" IsSelected="True" />
+                                        <ComboBoxItem Content="Lokale Drucker" />
+                                        <ComboBoxItem Content="Multifunktionsgeräte" />
+                                    </ComboBox>
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Label Grid.Column="0" Content="Anzahl:" />
+                                        <TextBox
+                                            x:Name="TextBoxPrinterCount"
+                                            Grid.Column="1"
+                                            Text="5"
+                                            ToolTip="Anzahl der zu erstellenden Drucker-Objekte (1–200)" />
+                                    </Grid>
+                                    <Button
+                                        x:Name="ButtonCreatePrinters"
+                                        Margin="0,4,0,0"
+                                        Content="🖨️ Drucker erstellen"
+                                        Style="{StaticResource ModernButton}"
+                                        ToolTip="Erstellt veröffentlichte Drucker (printQueue-Objekte) in der Test-OU (RESOURCES). Es werden keine echten Druckwarteschlangen angelegt." />
                                 </StackPanel>
                             </GroupBox>
 
@@ -1223,7 +1353,7 @@ $XAML = @"
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <Label Grid.Column="0" Content="BitLocker Keys für:" />
+                                        <Label Grid.Column="0" Content="BitLocker-Schlüssel für:" />
                                         <TextBox
                                             x:Name="TextBoxBitLockerComputerCount"
                                             Grid.Column="1"
@@ -1233,8 +1363,13 @@ $XAML = @"
                                     <Button
                                         x:Name="ButtonCreateBitLockerData"
                                         Margin="0,4,0,0"
-                                        Content="🔐 BitLocker Keys generieren"
-                                        Style="{StaticResource ModernButton}" />
+                                        Content="🔐 BitLocker-Schlüssel generieren"
+                                        Style="{StaticResource ModernButton}"
+                                        ToolTip="Erzeugt simulierte BitLocker-Wiederherstellungsdaten für erstellte Computer und exportiert sie als CSV" />
+                                    <CheckBox
+                                        x:Name="CheckBoxBitLockerRandomSelection"
+                                        Margin="0,2,0,0"
+                                        Content="Computer zufällig auswählen (sonst die ersten X)" />
 
                                     <Grid Margin="0,8,0,0">
                                         <Grid.ColumnDefinitions>
@@ -1251,8 +1386,25 @@ $XAML = @"
                                     <Button
                                         x:Name="ButtonCreateLAPSData"
                                         Margin="0,4,0,0"
-                                        Content="🔑 LAPS Passwörter generieren"
-                                        Style="{StaticResource SuccessButton}" />
+                                        Content="🔑 LAPS-Passwörter generieren"
+                                        Style="{StaticResource SuccessButton}"
+                                        ToolTip="Setzt LAPS-Testpasswörter für erstellte Computer und exportiert sie als CSV (Klartext – nach dem Test löschen!)" />
+                                    <Grid Margin="0,2,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox
+                                            x:Name="CheckBoxLAPSIncludeServers"
+                                            Grid.Column="0"
+                                            Content="Server einbeziehen"
+                                            IsChecked="True" />
+                                        <CheckBox
+                                            x:Name="CheckBoxLAPSIncludeWorkstations"
+                                            Grid.Column="1"
+                                            Content="Clients einbeziehen"
+                                            IsChecked="True" />
+                                    </Grid>
                                 </StackPanel>
                             </GroupBox>
                         </StackPanel>
@@ -1265,14 +1417,19 @@ $XAML = @"
                                 <StackPanel>
                                     <ComboBox x:Name="ComboBoxTestDataSize">
                                         <ComboBoxItem Content="Klein (10-50 Objekte)" IsSelected="True" />
-                                        <ComboBoxItem Content="Mittel (100-500 Objekte)" />
-                                        <ComboBoxItem Content="Groß (1000+ Objekte)" />
+                                        <ComboBoxItem Content="Mittel (50-500 Objekte)" />
+                                        <ComboBoxItem Content="Groß (500-5000 Objekte)" />
+                                        <ComboBoxItem Content="Enterprise (5000+ Objekte)" />
                                     </ComboBox>
                                     <CheckBox
                                         x:Name="CheckBoxRealisticData"
                                         Margin="0,4,0,0"
                                         Content="Realistische Verteilung"
                                         IsChecked="True" />
+                                    <CheckBox
+                                        x:Name="CheckBoxHistoricalData"
+                                        Margin="0,2,0,0"
+                                        Content="Historische Erstellungsdaten simulieren (in Beschreibung)" />
                                     <Button
                                         x:Name="ButtonCreateTestDataSet"
                                         Margin="0,4,0,0"
@@ -1287,11 +1444,44 @@ $XAML = @"
                                     <CheckBox x:Name="CheckBoxInvalidData" Content="Ungültige E-Mail-Adressen" />
                                     <CheckBox x:Name="CheckBoxMissingAttributes" Content="Fehlende Attribute" />
                                     <CheckBox x:Name="CheckBoxDuplicateEntries" Content="Doppelte Einträge" />
+                                    <CheckBox x:Name="CheckBoxSpecialCharacters" Content="Sonderzeichen und Unicode in Namen" />
                                     <Button
                                         x:Name="ButtonActivateChaosMode"
                                         Margin="0,4,0,0"
                                         Content="🎭 Chaos-Daten erstellen"
-                                        Style="{StaticResource DangerButton}" />
+                                        Style="{StaticResource DangerButton}"
+                                        ToolTip="Erstellt absichtlich fehlerhafte Test-Benutzer in der Test-OU (USERS) für Fehlerbehandlungs-Tests" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Margin="0,0,0,8" Header="⏱️ Performance-Test">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Label Grid.Column="0" Content="Benutzer:" />
+                                        <TextBox
+                                            x:Name="TextBoxPerformanceCount"
+                                            Grid.Column="1"
+                                            Text="100"
+                                            ToolTip="Anzahl der Test-Benutzer (1–5000)" />
+                                        <Label Grid.Column="2" Content="Batchgröße:" />
+                                        <TextBox
+                                            x:Name="TextBoxBatchSize"
+                                            Grid.Column="3"
+                                            Text="10"
+                                            ToolTip="Anzahl Benutzer pro Messintervall" />
+                                    </Grid>
+                                    <Button
+                                        x:Name="ButtonStartPerformanceTest"
+                                        Margin="0,4,0,0"
+                                        Content="⏱️ Performance-Test starten"
+                                        Style="{StaticResource WarningButton}"
+                                        ToolTip="Misst die Erstellungsgeschwindigkeit von Test-Benutzern (Test-OU USERS). Die Benutzer werden nachverfolgt und können über '🗑️ Löschen' (Erstellte Benutzer verwalten) entfernt werden; Messwerte werden als CSV exportiert." />
                                 </StackPanel>
                             </GroupBox>
                         </StackPanel>
@@ -1303,13 +1493,30 @@ $XAML = @"
                             <GroupBox Margin="0,0,0,8" Header="🔒 Passwort-Richtlinien">
                                 <StackPanel>
                                     <CheckBox x:Name="CheckBoxSimulatePasswordHistory" Content="Passwort-Historie simulieren" />
-                                    <CheckBox x:Name="CheckBoxCreateLockedAccounts" Content="Gesperrte Accounts erstellen (10%)" />
+                                    <CheckBox x:Name="CheckBoxCreateLockedAccounts" Content="Gesperrte Konten erstellen (10 %)" />
                                     <CheckBox x:Name="CheckBoxExpiredPasswords" Content="Abgelaufene Passwörter" />
                                     <Button
                                         x:Name="ButtonApplyPasswordPolicies"
                                         Margin="0,4,0,0"
                                         Content="🔒 Passwort-Richtlinien anwenden"
-                                        Style="{StaticResource WarningButton}" />
+                                        Style="{StaticResource WarningButton}"
+                                        ToolTip="Wendet die gewählten Passwort-Szenarien auf alle vom Tool erstellten Benutzer an" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Margin="0,0,0,8" Header="⏰ Anmeldezeiten">
+                                <StackPanel>
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{StaticResource TextSecondaryBrush}"
+                                        Text="Erlaubt die Anmeldung nur Mo–Fr 08:00–17:00 Uhr (lokale Zeit)."
+                                        TextWrapping="Wrap" />
+                                    <Button
+                                        x:Name="ButtonSetTimeRestrictions"
+                                        Margin="0,4,0,0"
+                                        Content="⏰ Anmeldezeiten setzen"
+                                        Style="{StaticResource WarningButton}"
+                                        ToolTip="Setzt logonHours (Mo–Fr 08:00–17:00 Uhr) bei allen vom Tool erstellten Benutzern" />
                                 </StackPanel>
                             </GroupBox>
 
@@ -1319,23 +1526,22 @@ $XAML = @"
                                         <ComboBoxItem Content="Helpdesk Operator" IsSelected="True" />
                                         <ComboBoxItem Content="Server Operator" />
                                         <ComboBoxItem Content="Backup Operator" />
+                                        <ComboBoxItem Content="Account Operator" />
+                                        <ComboBoxItem Content="Print Operator" />
                                     </ComboBox>
                                     <Button
                                         x:Name="ButtonCreateRBACRoles"
                                         Margin="0,4,0,0"
                                         Content="👑 RBAC-Struktur erstellen"
-                                        Style="{StaticResource ModernButton}" />
+                                        Style="{StaticResource ModernButton}"
+                                        ToolTip="Erstellt 5 Rollengruppen mit Berechtigungs-Untergruppen in der Test-OU (GROUPS)" />
                                 </StackPanel>
                             </GroupBox>
 
                             <GroupBox Margin="0,0,0,8" Header="⚠️ Kritische Einstellungen">
                                 <StackPanel>
                                     <CheckBox x:Name="CheckBoxPwdNotExpires" Content="Passwort läuft nicht ab" />
-                                    <CheckBox x:Name="CheckBoxRevPwd" Content="Umgekehrte Verschlüsselung" />
-                                    <ComboBox x:Name="ComboBoxCriticalGroups" Margin="0,4,0,0">
-                                        <ComboBoxItem Content="Domain Admins" />
-                                        <ComboBoxItem Content="Enterprise Admins" />
-                                    </ComboBox>
+                                    <CheckBox x:Name="CheckBoxRevPwd" Content="Umkehrbare Verschlüsselung" />
                                     <Button
                                         x:Name="ButtonApplySecuritySettings"
                                         Margin="0,4,0,0"
@@ -1352,14 +1558,15 @@ $XAML = @"
                         <StackPanel>
                             <GroupBox Margin="0,0,0,8" Header="🔧 Zusätzliche Test-Features">
                                 <StackPanel>
-                                    <CheckBox x:Name="CheckBoxCreateDNSEntries" Content="DNS-Einträge erstellen" />
+                                    <CheckBox x:Name="CheckBoxCreateDNSEntries" Content="DNS-Einträge simulieren (CSV)" />
                                     <CheckBox x:Name="CheckBoxCreateSPNs" Content="Service Principal Names (SPNs)" />
                                     <CheckBox x:Name="CheckBoxDocumentFSMO" Content="FSMO-Rollen dokumentieren" />
                                     <Button
                                         x:Name="ButtonCreateAdvancedFeatures"
                                         Margin="0,4,0,0"
                                         Content="🚀 Erweiterte Features ausführen"
-                                        Style="{StaticResource ModernButton}" />
+                                        Style="{StaticResource ModernButton}"
+                                        ToolTip="Simulierte DNS-Liste (CSV), SPNs für erstellte Dienstkonten und FSMO-Dokumentation (TXT)" />
                                 </StackPanel>
                             </GroupBox>
                         </StackPanel>
@@ -1413,44 +1620,42 @@ $XAML = @"
                     VerticalAlignment="Center"
                     FontSize="11"
                     Foreground="{StaticResource TextSecondaryBrush}"
-                    Text="$($Global:AppConfig.Author)" />
+                    Text="$($script:AppConfig.Author)" />
             </Grid>
         </Border>
     </Grid>
 </Window>
-"@ 
-#endregion 
- 
-#region Logging und Hilfsfunktionen 
-function Write-Log { 
-    # Write-Log ist in Windows PowerShell 5.1 / PowerShell 7 kein eingebautes Cmdlet (PSScriptAnalyzer-Fehlalarm)
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '')]
-    param( 
-        [string]$Message, 
-        [string]$Level = "INFO" # INFO, WARN, ERROR, DEBUG, SUCCESS 
-    ) 
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss" 
-    $logEntry = "[$timestamp] [$Level] $Message" 
-    Write-Host $logEntry # Für direkte Konsolenausgabe während der Entwicklung 
-    
-    if ($Global:Window -and $Global:GuiControls.TextBlockStatus) { 
-        $Global:GuiControls.TextBlockStatus.Text = $Message 
-    } 
-    
+"@
+#endregion
+
+#region Logging und Hilfsfunktionen
+function Write-AppLog {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO" # INFO, WARN, ERROR, DEBUG, SUCCESS
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "[$timestamp] [$Level] $Message"
+    Write-Verbose -Message $logEntry # Konsolenausgabe bei Start mit -Verbose bzw. $VerbosePreference = 'Continue'
+
+    if ($script:Window -and $script:GuiControls.TextBlockStatus) {
+        $script:GuiControls.TextBlockStatus.Text = $Message
+    }
+
     # In Datei loggen (Logs-Unterordner im Skriptverzeichnis)
     try {
         if (-not $script:LogDirectoryReady) {
-            if (-not (Test-Path -LiteralPath $Global:AppConfig.LogDirectory -PathType Container)) {
-                New-Item -Path $Global:AppConfig.LogDirectory -ItemType Directory -Force | Out-Null
+            if (-not (Test-Path -LiteralPath $script:AppConfig.LogDirectory -PathType Container)) {
+                New-Item -Path $script:AppConfig.LogDirectory -ItemType Directory -Force | Out-Null
             }
             $script:LogDirectoryReady = $true
         }
-        [System.IO.File]::AppendAllText($Global:AppConfig.LogFilePath, $logEntry + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($true))
+        [System.IO.File]::AppendAllText($script:AppConfig.LogFilePath, $logEntry + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($true))
     } catch {
         # Fehler beim Logging nicht weiterwerfen, um Hauptfunktionalität nicht zu beeinträchtigen
-        Write-Host "Fehler beim Schreiben in Logdatei: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Warning -Message "Fehler beim Schreiben in Logdatei: $($_.Exception.Message)"
     }
-} 
+}
 
 function Get-ExportFilePath {
     <#
@@ -1459,7 +1664,7 @@ function Get-ExportFilePath {
     #>
     param([Parameter(Mandatory = $true)][string]$FileName)
 
-    $exportDir = $Global:AppConfig.ExportDirectory
+    $exportDir = $script:AppConfig.ExportDirectory
     if (-not (Test-Path -LiteralPath $exportDir -PathType Container)) {
         New-Item -Path $exportDir -ItemType Directory -Force | Out-Null
     }
@@ -1530,18 +1735,22 @@ function ConvertTo-SecurePasswordString {
     return $secure
 }
 
-function New-RandomSecurePassword {
+function Get-RandomSecurePassword {
     <#
     .SYNOPSIS
     Erzeugt ein kryptografisch zufälliges Passwort direkt als SecureString
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Erzeugt nur einen SecureString, keine Systemänderung')]
     [CmdletBinding()]
+    [OutputType([System.Security.SecureString])]
     param(
         [string]$Complexity = "Mittel (12 Zeichen + Symbole)",
-        [int]$Length = 0
+        [int]$Length = 0,
+        [bool]$IncludeNumbers = $true,
+        [bool]$IncludeSymbols = $true,
+        [bool]$ExcludeAmbiguous = $true
     )
-    return (ConvertTo-SecurePasswordString -PlainText (Generate-SecurePassword -Complexity $Complexity -Length $Length))
+    $plainText = Get-RandomPasswordText -Complexity $Complexity -Length $Length -IncludeNumbers $IncludeNumbers -IncludeSymbols $IncludeSymbols -ExcludeAmbiguous $ExcludeAmbiguous
+    return (ConvertTo-SecurePasswordString -PlainText $plainText)
 }
 
 function Get-InitialUserPassword {
@@ -1549,11 +1758,19 @@ function Get-InitialUserPassword {
     .SYNOPSIS
     Liefert das im GUI eingegebene Initial-Passwort (SecureString) oder ein zufälliges Passwort pro Benutzer
     #>
-    $passwordBox = $Global:GuiControls.PasswordBoxInitialPassword
+    [CmdletBinding()]
+    [OutputType([System.Security.SecureString])]
+    param(
+        [string]$Complexity = "Komplex (16 Zeichen + Spezial)",
+        [bool]$IncludeNumbers = $true,
+        [bool]$IncludeSymbols = $true,
+        [bool]$ExcludeAmbiguous = $true
+    )
+    $passwordBox = $script:GuiControls.PasswordBoxInitialPassword
     if ($passwordBox -and $passwordBox.SecurePassword.Length -gt 0) {
         return $passwordBox.SecurePassword
     }
-    return (New-RandomSecurePassword -Complexity "Komplex (16 Zeichen + Spezial)")
+    return (Get-RandomSecurePassword -Complexity $Complexity -IncludeNumbers $IncludeNumbers -IncludeSymbols $IncludeSymbols -ExcludeAmbiguous $ExcludeAmbiguous)
 }
 
 function ConvertTo-CountryCode {
@@ -1593,7 +1810,7 @@ function Resolve-ADUserReference {
             Select-Object -First 1
         if ($found) { $dn = $found.DistinguishedName }
     } catch {
-        Write-Log "Benutzer-Verweis '$Reference' konnte nicht aufgelöst werden: $($_.Exception.Message)" -Level "DEBUG"
+        Write-AppLog "Benutzer-Verweis '$Reference' konnte nicht aufgelöst werden: $($_.Exception.Message)" -Level "DEBUG"
     }
     if ($Cache) { $Cache[$Reference] = $dn }
     return $dn
@@ -1605,17 +1822,17 @@ function Invoke-UiRefresh {
     Verarbeitet ausstehende WPF-Dispatcher-Nachrichten, damit die GUI während langer Vorgänge aktualisiert wird
     #>
     try {
-        if (-not $Global:Window) { return }
+        if (-not $script:Window) { return }
         $frame = New-Object System.Windows.Threading.DispatcherFrame
         $callback = [System.Windows.Threading.DispatcherOperationCallback] {
             param($f)
             $f.Continue = $false
             return $null
         }
-        [void]$Global:Window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, $callback, $frame)
+        [void]$script:Window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, $callback, $frame)
         [System.Windows.Threading.Dispatcher]::PushFrame($frame)
     } catch {
-        Write-Log "UI-Aktualisierung fehlgeschlagen: $($_.Exception.Message)" -Level "DEBUG"
+        Write-AppLog "UI-Aktualisierung fehlgeschlagen: $($_.Exception.Message)" -Level "DEBUG"
     }
 }
 
@@ -1624,16 +1841,16 @@ function Set-UiBusyState {
     .SYNOPSIS
     Sperrt bzw. entsperrt die Bedienoberfläche während eines laufenden Vorgangs (verhindert Doppelklicks/Reentrancy)
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Ändert nur den GUI-Zustand')]
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param([bool]$Busy)
+    if (-not $PSCmdlet.ShouldProcess("Bedienoberfläche", $(if ($Busy) { "Sperren" } else { "Entsperren" }))) { return }
     try {
-        if ($Global:Window -and $Global:Window.Content) {
-            $Global:Window.Content.IsHitTestVisible = -not $Busy
+        if ($script:Window -and $script:Window.Content) {
+            $script:Window.Content.IsHitTestVisible = -not $Busy
         }
         [System.Windows.Input.Mouse]::OverrideCursor = if ($Busy) { [System.Windows.Input.Cursors]::Wait } else { $null }
     } catch {
-        Write-Log "UI-Status konnte nicht gesetzt werden: $($_.Exception.Message)" -Level "DEBUG"
+        Write-AppLog "UI-Status konnte nicht gesetzt werden: $($_.Exception.Message)" -Level "DEBUG"
     }
 }
 
@@ -1644,27 +1861,27 @@ function Invoke-GuiAction {
     #>
     param([Parameter(Mandatory = $true)][scriptblock]$Action)
 
-    if ($Global:IsBusy) {
-        Write-Log "Es läuft bereits ein Vorgang - bitte warten." -Level "WARN"
+    if ($script:IsBusy) {
+        Write-AppLog "Es läuft bereits ein Vorgang - bitte warten." -Level "WARN"
         return
     }
-    $Global:IsBusy = $true
+    $script:IsBusy = $true
     try {
         & $Action
     } catch {
-        Write-Log "Unbehandelter Fehler: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Unbehandelter Fehler: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Es ist ein Fehler aufgetreten:`n$($_.Exception.Message)", "Fehler", "OK", "Error") | Out-Null
     } finally {
         Hide-Progress
-        $Global:IsBusy = $false
+        $script:IsBusy = $false
     }
 }
 
-function Normalize-SamAccountName {
+function ConvertTo-NormalizedSamAccountName {
     <#
     .SYNOPSIS
     Normalisiert einen SamAccountName für Active Directory-Kompatibilität.
-    
+
     .DESCRIPTION
     Diese Funktion bereinigt und normalisiert einen SamAccountName, um sicherzustellen,
     dass er den AD-Anforderungen entspricht:
@@ -1674,37 +1891,37 @@ function Normalize-SamAccountName {
     - Nur ASCII-Zeichen (a-z, A-Z, 0-9, -, _)
     - Maximale Länge von 20 Zeichen
     - Eindeutigkeit durch Counter bei Duplikaten
-    
+
     .PARAMETER SamAccountName
     Der ursprüngliche SamAccountName aus der CSV-Datei
-    
+
     .PARAMETER ExistingNames
     HashSet bestehender Namen zur Duplikatsvermeidung
-    
+
     .EXAMPLE
-    Normalize-SamAccountName -SamAccountName "müller.johann" -ExistingNames $existingNames
+    ConvertTo-NormalizedSamAccountName -SamAccountName "müller.johann" -ExistingNames $existingNames
     # Gibt zurück: "mueller.johann"
-    
+
     .EXAMPLE
-    Normalize-SamAccountName -SamAccountName "mauch schlauchin" -ExistingNames $existingNames
+    ConvertTo-NormalizedSamAccountName -SamAccountName "mauch schlauchin" -ExistingNames $existingNames
     # Gibt zurück: "mauch_schlauchin"
     #>
     param(
         [Parameter(Mandatory=$true)]
         [string]$SamAccountName,
-        
+
         [Parameter(Mandatory=$false)]
         [System.Collections.Generic.HashSet[string]]$ExistingNames
     )
-    
+
     if ([string]::IsNullOrWhiteSpace($SamAccountName)) {
-        Write-Log "Normalize-SamAccountName: Leerer SamAccountName übergeben" -Level "ERROR"
+        Write-AppLog "ConvertTo-NormalizedSamAccountName: Leerer SamAccountName übergeben" -Level "ERROR"
         return "user" + (Get-Random -Minimum 1000 -Maximum 9999)
     }
-    
+
     # 1. Zu Lowercase konvertieren
     $normalized = $SamAccountName.ToLower()
-    
+
     # 2. Umlaute und Akzente ersetzen
     $replacements = @{
         'ä' = 'ae'; 'ö' = 'oe'; 'ü' = 'ue'; 'ß' = 'ss'
@@ -1717,46 +1934,46 @@ function Normalize-SamAccountName {
         'ñ' = 'n'; 'ç' = 'c'
         'ą' = 'a'; 'ć' = 'c'; 'ę' = 'e'; 'ł' = 'l'; 'ń' = 'n'; 'ś' = 's'; 'ź' = 'z'; 'ż' = 'z'
     }
-    
+
     foreach ($char in $replacements.Keys) {
         $normalized = $normalized -replace [regex]::Escape($char), $replacements[$char]
     }
-    
+
     # 3. Leerzeichen durch Unterstriche ersetzen
     $normalized = $normalized -replace '\s+', '_'
-    
+
     # 4. Sonderzeichen entfernen oder ersetzen
     $normalized = $normalized -replace "'", ''  # Apostrophe entfernen
     $normalized = $normalized -replace '[^\w.-]', ''  # Nur Buchstaben, Zahlen, Punkte, Bindestriche, Unterstriche
-    
+
     # 5. Mehrfache Punkte/Unterstriche/Bindestriche zusammenfassen
     $normalized = $normalized -replace '\.{2,}', '.'
     $normalized = $normalized -replace '_{2,}', '_'
     $normalized = $normalized -replace '-{2,}', '-'
-    
+
     # 6. Führende/nachfolgende Sonderzeichen entfernen
     $normalized = $normalized.Trim('.', '_', '-')
-    
+
     # 7. Nicht-ASCII-Zeichen durch Platzhalter ersetzen (für chinesische, japanische, koreanische, thai Zeichen)
     $normalized = $normalized -replace '[^\x00-\x7F]', 'x'
-    
+
     # 8. Falls leer, Fallback verwenden
     if ([string]::IsNullOrWhiteSpace($normalized)) {
         $normalized = "user" + (Get-Random -Minimum 1000 -Maximum 9999)
-        Write-Log "SamAccountName war nach Normalisierung leer, verwende Fallback: $normalized" -Level "WARN"
+        Write-AppLog "SamAccountName war nach Normalisierung leer, verwende Fallback: $normalized" -Level "WARN"
     }
-    
+
     # 9. Auf 20 Zeichen kürzen (AD-Limit)
     if ($normalized.Length -gt 20) {
         $normalized = $normalized.Substring(0, 17) + (Get-Random -Minimum 100 -Maximum 999)
-        Write-Log "SamAccountName zu lang, gekürzt auf: $normalized" -Level "DEBUG"
+        Write-AppLog "SamAccountName zu lang, gekürzt auf: $normalized" -Level "DEBUG"
     }
-    
+
     # 10. Eindeutigkeit sicherstellen
     if ($ExistingNames) {
         $originalNormalized = $normalized
         $counter = 1
-        
+
         while ($ExistingNames.Contains($normalized)) {
             $suffix = $counter.ToString()
             if (($originalNormalized.Length + $suffix.Length) -le 20) {
@@ -1766,120 +1983,59 @@ function Normalize-SamAccountName {
                 $normalized = $originalNormalized.Substring(0, $baseLength) + $suffix
             }
             $counter++
-            
+
             # Sicherheitsbremse gegen Endlosschleife
             if ($counter -gt 999) {
                 $normalized = "user" + (Get-Random -Minimum 1000 -Maximum 9999)
                 break
             }
         }
-        
+
         # Zur Liste hinzufügen
         $ExistingNames.Add($normalized) | Out-Null
-        
+
         if ($normalized -ne $originalNormalized) {
-            Write-Log "SamAccountName Duplikat vermieden: '$originalNormalized' → '$normalized'" -Level "DEBUG"
+            Write-AppLog "SamAccountName Duplikat vermieden: '$originalNormalized' → '$normalized'" -Level "DEBUG"
         }
     }
-    
-    Write-Log "SamAccountName normalisiert: '$SamAccountName' → '$normalized'" -Level "DEBUG"
+
+    Write-AppLog "SamAccountName normalisiert: '$SamAccountName' → '$normalized'" -Level "DEBUG"
     return $normalized
 }
 
-function Get-GuiControls {
+function Initialize-GuiControl {
     <#
     .SYNOPSIS
     Sammelt alle benannten GUI-Controls aus dem XAML-Window
-    
+
     .DESCRIPTION
-    Diese Funktion durchsucht das XAML-Window nach allen benannten Controls
-    und speichert sie in der globalen GuiControls-Hashtable für einfachen Zugriff.
+    Die Namen werden direkt aus der XAML-Definition gelesen (alle x:Name außerhalb von ControlTemplates),
+    damit Code und Oberfläche nicht auseinanderlaufen. Die Controls werden in $script:GuiControls abgelegt.
     #>
-    try {
-        Write-Log "Sammle GUI-Controls..." -Level "INFO"
-        
-        # Liste der erwarteten Controls
-        $expectedControls = @(
-            'TextBoxCsvPath', 'ButtonBrowseCsv', 'ButtonLoadCsv', 'DataGridCsvContent',
-            'ComboBoxTargetOU', 'TextBoxNumUsersToCreate', 'PasswordBoxInitialPassword', 'StackPanelAttributeSelection',
-            'ButtonCreateADUsers', 'GridProgressArea', 'LabelProgress', 'ProgressBarMain',
-            'TextBoxNumUsersForAction', 'ButtonFillAttributes', 'ButtonDisableUsers',
-            'ButtonDeleteUsers', 'ButtonExportCreatedUsers', 'CheckBoxPwdNotExpires',
-            'CheckBoxRevPwd', 'ButtonApplySecuritySettings', 'ComboBoxCriticalGroups',
-            'ButtonAssignToGroups', 'TextBlockStatus',
-            # Neue Controls für Benutzer-Erstellung & Verwaltung
-            'ButtonGeneratePasswords', 'ComboBoxPasswordComplexity', 'CheckBoxIncludeNumbers',
-            'CheckBoxIncludeSymbols', 'CheckBoxExcludeAmbiguous', 'ButtonGenerateRandomData',
-            'CheckBoxRandomNames', 'CheckBoxRandomAddresses', 'CheckBoxRandomPhone',
-            'CheckBoxRandomDepartments', 'ComboBoxUserTemplates', 'ButtonCreateFromTemplate',
-            'TextBoxTemplateUser', 'ButtonBrowseTemplateUser', 'CheckBoxSetExpiryDate',
-            'DatePickerExpiry', 'CheckBoxTemporaryAccount', 'ButtonSetTimeRestrictions',
-            'CheckBoxGenerateAvatars', 'TextBoxAvatarPath', 'ButtonBrowseAvatars',
-            'ButtonAssignAvatars', 'TextBoxRandomUserCount', 'CheckBoxRandomTitles', 
-            'CheckBoxRandomCompany', 'ButtonCreateRandomUsers', 'TextBoxCompanyName',
-            'ButtonCreateTestEnvironment',
-            # Schnellzugriff Controls
-            'ButtonQuickRandomUsers', 'ButtonQuickCreateGroups', 'ButtonQuickTestData', 'ButtonQuickCleanup',
-            'GridQuickProgress', 'TextBlockQuickStatus', 'ProgressBarQuick',
-            'ButtonDeleteGroups', 'ButtonDeleteComputers', 'ButtonDeleteOUs', 'ButtonDeleteServiceAccounts',
-            'ButtonExportAll',
-            # Statistik Controls
-            'TextBlockUserCount', 'TextBlockGroupCount', 'TextBlockComputerCount',
-            'TextBlockOUCount', 'TextBlockServiceCount', 'TextBlockTotalCount',
-            # Controls für Gruppen & Organisationsstruktur
-            'CheckBoxCreateDepartmentGroups', 'CheckBoxCreateLocationGroups', 'CheckBoxCreateJobTitleGroups',
-            'ButtonCreateAutoGroups', 'ComboBoxGroupHierarchy', 'CheckBoxNestedSecurity',
-            'ButtonCreateNestedGroups', 'TextBoxGroupFilter', 'ButtonCreateDynamicGroups',
-            'ComboBoxOUStructure', 'CheckBoxCreateGPOStructure', 'ButtonCreateOUStructure',
-            # Controls für Computer & Geräte
-            'TextBoxComputerCount', 'ComboBoxComputerType', 'CheckBoxRandomComputerNames',
-            'ButtonCreateComputers', 'ComboBoxServiceType', 'TextBoxServiceAccountCount',
-            'ButtonCreateServiceAccounts', 'TextBoxPrinterCount', 'ComboBoxPrinterType',
-            'ButtonCreatePrinters', 'TextBoxBitLockerComputerCount', 'CheckBoxBitLockerRandomSelection',
-            'ButtonCreateBitLockerData', 'TextBoxLAPSSystemCount', 'CheckBoxLAPSIncludeServers',
-            'CheckBoxLAPSIncludeWorkstations', 'ButtonCreateLAPSData',
-            # Controls für Test-Szenarien
-            'ComboBoxTestDataSize', 'CheckBoxRealisticData', 'CheckBoxHistoricalData',
-            'ButtonCreateTestDataSet', 'CheckBoxInvalidData', 'CheckBoxMissingAttributes',
-            'CheckBoxDuplicateEntries', 'CheckBoxSpecialCharacters', 'ButtonActivateChaosMode',
-            'TextBoxPerformanceCount', 'TextBoxBatchSize', 'ButtonStartPerformanceTest',
-            # Controls für Sicherheit & Compliance
-            'CheckBoxSimulatePasswordHistory', 'CheckBoxCreateLockedAccounts', 'CheckBoxExpiredPasswords',
-            'SliderLockoutRatio', 'ButtonApplyPasswordPolicies', 'ComboBoxRBACRoles',
-            'TextBoxRoleCount', 'ButtonCreateRBACRoles', 'CheckBoxSimulateBitLocker',
-            'CheckBoxRecoveryKeys', 'ButtonCreateBitLockerKeys',
-            # Controls für Erweiterte Features
-            'CheckBoxCreateDNSEntries', 'CheckBoxCreateARecords', 'CheckBoxCreateCNAME',
-            'ButtonCreateDNSEntries', 'CheckBoxSIDHistory', 'CheckBoxTrustRelationships',
-            'TextBoxSourceDomain', 'ButtonSimulateMigration', 'CheckBoxCreateSPNs',
-            'CheckBoxKerberosConstraints', 'ComboBoxKerberosService', 'ButtonCreateKerberosTests',
-            'CheckBoxDocumentFSMO', 'CheckBoxExportDomainInfo', 'ButtonDocumentFSMO',
-            'ButtonCreateAdvancedFeatures'
-        )
-        
-        foreach ($controlName in $expectedControls) {
-            $control = $Global:Window.FindName($controlName)
-            if ($null -ne $control) {
-                $Global:GuiControls[$controlName] = $control
-                Write-Log "Control gefunden: $controlName" -Level "DEBUG"
-            } else {
-                Write-Log "Control nicht gefunden: $controlName" -Level "WARN"
-            }
+    Write-AppLog "Sammle GUI-Controls..." -Level "INFO"
+
+    $xamlDocument = [xml]$XAML
+    $namespaceManager = New-Object System.Xml.XmlNamespaceManager($xamlDocument.NameTable)
+    $namespaceManager.AddNamespace('x', 'http://schemas.microsoft.com/winfx/2006/xaml')
+    $namedNodes = $xamlDocument.SelectNodes('//*[@x:Name][not(ancestor::*[local-name()="ControlTemplate"])]', $namespaceManager)
+
+    foreach ($node in $namedNodes) {
+        $controlName = $node.GetAttribute('Name', 'http://schemas.microsoft.com/winfx/2006/xaml')
+        $control = $script:Window.FindName($controlName)
+        if ($null -ne $control) {
+            $script:GuiControls[$controlName] = $control
+        } else {
+            Write-AppLog "Control nicht gefunden: $controlName" -Level "WARN"
         }
-        
-        Write-Log "$(($Global:GuiControls.Keys).Count) Controls erfolgreich gesammelt" -Level "SUCCESS"
-        return $true
-        
-    } catch {
-        Write-Log "Fehler beim Sammeln der Controls: $($_.Exception.Message)" -Level "ERROR"
-        return $false
     }
+
+    Write-AppLog "$($script:GuiControls.Count) Controls erfolgreich gesammelt" -Level "SUCCESS"
 }
 
 #region Benutzer-Erstellung & Verwaltung - Erweiterte Funktionen
 
 # Vordefinierte Listen für Zufallsdaten
-$Global:RandomDataLists = @{
+$script:RandomDataLists = @{
     FirstNames = @(
         "Max", "Anna", "Felix", "Sophie", "Leon", "Marie", "Paul", "Emma", "Ben", "Mia",
         "Jonas", "Hannah", "Elias", "Emilia", "Noah", "Lena", "Luis", "Lea", "Finn", "Clara",
@@ -1910,11 +2066,11 @@ $Global:RandomDataLists = @{
     )
 }
 
-function Generate-SecurePassword {
+function Get-RandomPasswordText {
     <#
     .SYNOPSIS
     Generiert sichere Passwörter mit verschiedenen Komplexitätsstufen
-    
+
     .DESCRIPTION
     Erstellt Passwörter basierend auf ausgewählter Komplexität und Optionen.
     Verwendet einen kryptografisch sicheren Zufallszahlengenerator (RandomNumberGenerator).
@@ -1927,16 +2083,16 @@ function Generate-SecurePassword {
         [bool]$ExcludeAmbiguous = $true,
         [int]$Length = 0 # 0 = Länge aus Komplexität ableiten
     )
-    
+
     # Zeichensätze definieren
     $lowercase = 'abcdefghijklmnopqrstuvwxyz'
     $uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     $numbers = '0123456789'
     $symbols = '!@#$%^&*()_+-=[]{}|;:,.<>?'
-    
+
     # Mehrdeutige Zeichen
     $ambiguous = 'il1Lo0O'
-    
+
     # Länge basierend auf Komplexität
     $targetLength = switch ($Complexity) {
         "Einfach (8 Zeichen)" { 8 }
@@ -1946,9 +2102,9 @@ function Generate-SecurePassword {
         default { 12 }
     }
     if ($Length -gt 0) { $targetLength = $Length }
-    
+
     $useSymbols = $IncludeSymbols -and $Complexity -ne "Einfach (8 Zeichen)"
-    
+
     # Mehrdeutige Zeichen entfernen
     if ($ExcludeAmbiguous) {
         foreach ($char in $ambiguous.ToCharArray()) {
@@ -1957,24 +2113,24 @@ function Generate-SecurePassword {
             $numbers = $numbers.Replace($char.ToString(), '')
         }
     }
-    
+
     # Basis-Zeichensatz erweitern
     $charSet = $lowercase + $uppercase
     if ($IncludeNumbers) { $charSet += $numbers }
     if ($useSymbols) { $charSet += $symbols }
-    
+
     # Mindestens ein Zeichen aus jeder gewählten Kategorie sicherstellen
     $passwordChars = New-Object System.Collections.Generic.List[char]
     $passwordChars.Add($lowercase[(Get-CryptoRandomInt -MaxExclusive $lowercase.Length)])
     $passwordChars.Add($uppercase[(Get-CryptoRandomInt -MaxExclusive $uppercase.Length)])
     if ($IncludeNumbers) { $passwordChars.Add($numbers[(Get-CryptoRandomInt -MaxExclusive $numbers.Length)]) }
     if ($useSymbols) { $passwordChars.Add($symbols[(Get-CryptoRandomInt -MaxExclusive $symbols.Length)]) }
-    
+
     # Rest auffüllen
     while ($passwordChars.Count -lt $targetLength) {
         $passwordChars.Add($charSet[(Get-CryptoRandomInt -MaxExclusive $charSet.Length)])
     }
-    
+
     # Passwort mischen (Fisher-Yates mit kryptografischem Zufall)
     $passwordArray = $passwordChars.ToArray()
     for ($i = $passwordArray.Length - 1; $i -gt 0; $i--) {
@@ -1983,288 +2139,191 @@ function Generate-SecurePassword {
         $passwordArray[$i] = $passwordArray[$j]
         $passwordArray[$j] = $tmp
     }
-    
-    Write-Log "Passwort generiert (Komplexität: $Complexity, Länge: $($passwordArray.Length))" -Level "DEBUG"
+
+    Write-AppLog "Passwort generiert (Komplexität: $Complexity, Länge: $($passwordArray.Length))" -Level "DEBUG"
     return (-join $passwordArray)
 }
 
-function Generate-RandomUserData {
-    <#
-    .SYNOPSIS
-    Generiert zufällige Benutzerdaten basierend auf vordefinierten Listen
-    #>
-    param(
-        [bool]$RandomNames = $true,
-        [bool]$RandomAddresses = $false,
-        [bool]$RandomPhone = $false,
-        [bool]$RandomDepartments = $false
-    )
-    
-    try {
-        $userData = @{}
-        $random = New-Object System.Random
-        
-        if ($RandomNames) {
-            $firstName = $Global:RandomDataLists.FirstNames[$random.Next($Global:RandomDataLists.FirstNames.Count)]
-            $lastName = $Global:RandomDataLists.LastNames[$random.Next($Global:RandomDataLists.LastNames.Count)]
-            
-            $userData.FirstName = $firstName
-            $userData.LastName = $lastName
-            $userData.DisplayName = "$firstName $lastName"
-            $userData.SamAccountName = "$($firstName.ToLower()).$($lastName.ToLower())"
-        }
-        
-        if ($RandomAddresses) {
-            $street = $Global:RandomDataLists.Streets[$random.Next($Global:RandomDataLists.Streets.Count)]
-            $number = $random.Next(1, 200)
-            $city = $Global:RandomDataLists.Cities[$random.Next($Global:RandomDataLists.Cities.Count)]
-            $postalCode = $random.Next(10000, 99999)
-            
-            $userData.StreetAddress = "$street $number"
-            $userData.City = $city
-            $userData.PostalCode = $postalCode.ToString()
-            $userData.State = "Germany"
-            $userData.Country = "DE"
-        }
-        
-        if ($RandomPhone) {
-            $areaCode = $random.Next(100, 999)
-            $number = $random.Next(1000000, 9999999)
-            $userData.PhoneNumber = "+49 $areaCode $number"
-            $userData.MobilePhone = "+49 1$($random.Next(50, 79)) $($random.Next(1000000, 9999999))"
-        }
-        
-        if ($RandomDepartments) {
-            $userData.Department = $Global:RandomDataLists.Departments[$random.Next($Global:RandomDataLists.Departments.Count)]
-            $userData.Title = $Global:RandomDataLists.JobTitles[$random.Next($Global:RandomDataLists.JobTitles.Count)]
-            $userData.Company = "Example Corp"
-        }
-        
-        Write-Log "Zufällige Benutzerdaten generiert" -Level "DEBUG"
-        return $userData
-        
-    } catch {
-        Write-Log "Fehler bei Generierung von Zufallsdaten: $($_.Exception.Message)" -Level "ERROR"
-        return @{}
-    }
-}
-
-function Get-UserTemplate {
-    <#
-    .SYNOPSIS
-    Gibt vordefinierte Benutzer-Templates zurück
-    #>
-    param(
-        [string]$TemplateType = "Standard-Benutzer"
-    )
-    
-    $templates = @{
-        "Standard-Benutzer" = @{
-            PasswordNeverExpires = $false
-            ChangePasswordAtLogon = $true
-            Enabled = $true
-            Description = "Standard User Account"
-        }
-        "Administrator" = @{
-            PasswordNeverExpires = $true
-            ChangePasswordAtLogon = $false
-            Enabled = $true
-            Description = "Administrative Account"
-            MemberOf = @("Domain Admins", "Administrators")
-        }
-        "Gast-Benutzer" = @{
-            PasswordNeverExpires = $false
-            ChangePasswordAtLogon = $true
-            Enabled = $false
-            Description = "Guest User Account"
-            AccountExpirationDate = (Get-Date).AddDays(30)
-        }
-        "Service-Account" = @{
-            PasswordNeverExpires = $true
-            ChangePasswordAtLogon = $false
-            Enabled = $true
-            Description = "Service Account - Do not disable"
-            UserCannotChangePassword = $true
-        }
-        "Extern/Contractor" = @{
-            PasswordNeverExpires = $false
-            ChangePasswordAtLogon = $true
-            Enabled = $true
-            Description = "External Contractor Account"
-            AccountExpirationDate = (Get-Date).AddDays(90)
-        }
-    }
-    
-    return $templates[$TemplateType]
-}
-
 #endregion
-#endregion 
- 
-#region Event Handler und GUI Logik 
- 
-function Import-CsvData { 
-    $csvPath = $Global:GuiControls.TextBoxCsvPath.Text 
-    if ([string]::IsNullOrWhiteSpace($csvPath) -or -not (Test-Path -LiteralPath $csvPath -PathType Leaf)) { 
-        Write-Log "CSV-Datei nicht gefunden: $csvPath" -Level "ERROR" 
-        [System.Windows.MessageBox]::Show("Die angegebene CSV-Datei wurde nicht gefunden: `n$csvPath", "Fehler", "OK", "Error") 
-        return 
-    } 
-    try { 
-        $Global:CsvData = @(Import-Csv -LiteralPath $csvPath -Encoding UTF8)
-        $Global:GuiControls.DataGridCsvContent.ItemsSource = $Global:CsvData 
-        Write-Log "CSV-Datei erfolgreich geladen: $csvPath ($($Global:CsvData.Count) Einträge)" -Level "SUCCESS" 
- 
-        # Attribute für Auswahl-Checkboxes populieren 
-        $Global:GuiControls.StackPanelAttributeSelection.Children.Clear() 
-        $csvHeaders = $Global:CsvData | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name 
- 
-        foreach ($attrInfo in $Global:SelectableADAttributes) { 
-            if ($csvHeaders -contains $attrInfo.CsvHeader) { 
-                $checkBox = New-Object System.Windows.Controls.CheckBox 
-                $checkBox.Content = "$($attrInfo.Name) (aus $($attrInfo.CsvHeader))" 
-                $checkBox.Tag = $attrInfo # Store the attribute info object 
-                if ($attrInfo.Required -or @("GivenName", "Surname", "DisplayName", "UserPrincipalName") -contains $attrInfo.Name) { 
-                    $checkBox.IsChecked = $true # Pre-select required and common attributes 
-                } 
-                $Global:GuiControls.StackPanelAttributeSelection.Children.Add($checkBox) | Out-Null 
-            } 
-        } 
-    } catch { 
-        Write-Log "Fehler beim Laden der CSV-Datei: $($_.Exception.Message)" -Level "ERROR" 
-        [System.Windows.MessageBox]::Show("Fehler beim Laden der CSV-Datei:`n$($_.Exception.Message)", "Fehler", "OK", "Error") 
-    } 
-} 
- 
-function New-ADUsersFromCsv { 
-    if (-not $Global:CsvData) { 
-        Write-Log "Bitte zuerst eine CSV-Datei laden." -Level "WARN" 
-        [System.Windows.MessageBox]::Show("Bitte laden Sie zuerst eine CSV-Datei.", "Hinweis", "OK", "Warning") 
-        return 
-    } 
- 
+#endregion
+
+#region Event Handler und GUI Logik
+
+function Import-CsvData {
+    $csvPath = $script:GuiControls.TextBoxCsvPath.Text
+    if ([string]::IsNullOrWhiteSpace($csvPath) -or -not (Test-Path -LiteralPath $csvPath -PathType Leaf)) {
+        Write-AppLog "CSV-Datei nicht gefunden: $csvPath" -Level "ERROR"
+        [System.Windows.MessageBox]::Show("Die angegebene CSV-Datei wurde nicht gefunden: `n$csvPath", "Fehler", "OK", "Error")
+        return
+    }
+    try {
+        $script:CsvData = @(Import-Csv -LiteralPath $csvPath -Encoding UTF8)
+        $script:GuiControls.DataGridCsvContent.ItemsSource = $script:CsvData
+        Write-AppLog "CSV-Datei erfolgreich geladen: $csvPath ($($script:CsvData.Count) Einträge)" -Level "SUCCESS"
+
+        # Attribute für Auswahl-Checkboxes populieren
+        $script:GuiControls.StackPanelAttributeSelection.Children.Clear()
+        $csvHeaders = $script:CsvData | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
+
+        foreach ($attrInfo in $script:SelectableADAttributes) {
+            if ($csvHeaders -contains $attrInfo.CsvHeader) {
+                $checkBox = New-Object System.Windows.Controls.CheckBox
+                $checkBox.Content = "$($attrInfo.Name) (aus $($attrInfo.CsvHeader))"
+                $checkBox.Tag = $attrInfo # Store the attribute info object
+                if ($attrInfo.Required -or @("GivenName", "Surname", "DisplayName", "UserPrincipalName") -contains $attrInfo.Name) {
+                    $checkBox.IsChecked = $true # Pre-select required and common attributes
+                }
+                $script:GuiControls.StackPanelAttributeSelection.Children.Add($checkBox) | Out-Null
+            }
+        }
+    } catch {
+        Write-AppLog "Fehler beim Laden der CSV-Datei: $($_.Exception.Message)" -Level "ERROR"
+        [System.Windows.MessageBox]::Show("Fehler beim Laden der CSV-Datei:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
+    }
+}
+
+function New-ADUserFromCsv {
+    <#
+    .SYNOPSIS
+    Erstellt Benutzer aus der geladenen CSV-Datei
+    .DESCRIPTION
+    Die in diesem Lauf erstellten Benutzer werden zusätzlich (mit CSV-Zeilennummer) in $script:LastCsvImportUsers
+    gespeichert. 'Attribute befüllen' arbeitet ausschließlich mit dieser Liste; jeder neue CSV-Import ersetzt sie.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    if (-not $script:CsvData) {
+        Write-AppLog "Bitte zuerst eine CSV-Datei laden." -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte laden Sie zuerst eine CSV-Datei.", "Hinweis", "OK", "Warning")
+        return
+    }
+
     # AD-Verbindung prüfen
     if (-not (Test-ADConnection)) {
         return
     }
 
-    $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text 
-    if (-not $targetOU) { 
-        Write-Log "Bitte geben Sie eine Ziel-OU an." -Level "WARN" 
-        [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Ziel-OU (Distinguished Name) an.", "Hinweis", "OK", "Warning") 
-        return 
-    } 
-    
-    # OU validieren
-    if (-not (Validate-TargetOU -TargetOU $targetOU)) {
+    $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
+    if (-not $targetOU) {
+        Write-AppLog "Bitte geben Sie eine Ziel-OU an." -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Ziel-OU (Distinguished Name) an.", "Hinweis", "OK", "Warning")
         return
-    } 
- 
-    $numUsersToCreateText = $Global:GuiControls.TextBoxNumUsersToCreate.Text 
+    }
+
+    # OU validieren
+    if (-not (Test-TargetOU -TargetOU $targetOU)) {
+        return
+    }
+
+    $numUsersToCreateText = $script:GuiControls.TextBoxNumUsersToCreate.Text
     $numUsersToCreate = 0
     if ([string]::IsNullOrWhiteSpace($numUsersToCreateText)) {
-        $numUsersToCreate = @($Global:CsvData).Count
+        $numUsersToCreate = @($script:CsvData).Count
     } elseif (-not [int]::TryParse($numUsersToCreateText.Trim(), [ref]$numUsersToCreate)) {
-        Write-Log "Ungültige Anzahl: '$numUsersToCreateText'" -Level "WARN"
+        Write-AppLog "Ungültige Anzahl: '$numUsersToCreateText'" -Level "WARN"
         [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Zahl für die Anzahl der Benutzer ein.", "Hinweis", "OK", "Warning")
         return
     }
- 
-    if ($numUsersToCreate -le 0) { 
-        Write-Log "Anzahl der zu erstellenden Benutzer muss größer als 0 sein." -Level "WARN" 
-        return 
-    } 
- 
-    $selectedAttributesCheckboxes = $Global:GuiControls.StackPanelAttributeSelection.Children | Where-Object {$_.IsChecked -eq $true} 
-    if ($selectedAttributesCheckboxes.Count -eq 0) { 
-        Write-Log "Bitte wählen Sie mindestens ein Attribut für die Benutzererstellung aus." -Level "WARN" 
-        [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens ein Attribut für die Benutzererstellung aus.", "Hinweis", "OK", "Warning") 
-        return 
-    } 
- 
-    # Sicherstellen, dass SamAccountName ausgewählt ist, wenn es in der CSV existiert 
-    $samAttrInfo = $Global:SelectableADAttributes | Where-Object {$_.Name -eq "SamAccountName"} 
-    $samSelected = $selectedAttributesCheckboxes | ForEach-Object { $_.Tag } | Where-Object {$_.Name -eq "SamAccountName"} 
-    if (($Global:CsvData[0].PSObject.Properties.Name -contains $samAttrInfo.CsvHeader) -and (-not $samSelected)) { 
-         Write-Log "Das Attribut 'SamAccountName' muss ausgewählt sein, wenn es in der CSV existiert und für die Erstellung verwendet werden soll." -Level "WARN" 
-        [System.Windows.MessageBox]::Show("Das Attribut 'SamAccountName' (aus CSV-Spalte '$($samAttrInfo.CsvHeader)') ist für die Benutzererstellung erforderlich und muss ausgewählt werden.", "Hinweis", "OK", "Warning") 
-        return 
-    } 
+
+    if ($numUsersToCreate -le 0) {
+        Write-AppLog "Anzahl der zu erstellenden Benutzer muss größer als 0 sein." -Level "WARN"
+        return
+    }
+
+    $selectedAttributesCheckboxes = $script:GuiControls.StackPanelAttributeSelection.Children | Where-Object {$_.IsChecked -eq $true}
+    if ($selectedAttributesCheckboxes.Count -eq 0) {
+        Write-AppLog "Bitte wählen Sie mindestens ein Attribut für die Benutzererstellung aus." -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens ein Attribut für die Benutzererstellung aus.", "Hinweis", "OK", "Warning")
+        return
+    }
+
+    # Sicherstellen, dass SamAccountName ausgewählt ist, wenn es in der CSV existiert
+    $samAttrInfo = $script:SelectableADAttributes | Where-Object {$_.Name -eq "SamAccountName"}
+    $samSelected = $selectedAttributesCheckboxes | ForEach-Object { $_.Tag } | Where-Object {$_.Name -eq "SamAccountName"}
+    if (($script:CsvData[0].PSObject.Properties.Name -contains $samAttrInfo.CsvHeader) -and (-not $samSelected)) {
+         Write-AppLog "Das Attribut 'SamAccountName' muss ausgewählt sein, wenn es in der CSV existiert und für die Erstellung verwendet werden soll." -Level "WARN"
+        [System.Windows.MessageBox]::Show("Das Attribut 'SamAccountName' (aus CSV-Spalte '$($samAttrInfo.CsvHeader)') ist für die Benutzererstellung erforderlich und muss ausgewählt werden.", "Hinweis", "OK", "Warning")
+        return
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($targetOU, "Bis zu $numUsersToCreate Benutzer aus CSV erstellen")) { return }
 
     # Fortschrittsanzeige aktivieren
     Show-Progress -Text "Starte Benutzererstellung..." -Value 0
- 
-    Write-Log "Starte Erstellung von bis zu $numUsersToCreate AD-Benutzern..." -Level "INFO" 
-    $Global:CreatedUsers.Clear() 
-    $createdCount = 0 
-    $errorCount = 0 
-    
+
+    Write-AppLog "Starte Erstellung von bis zu $numUsersToCreate AD-Benutzern..." -Level "INFO"
+    # Nur die Zuordnung für 'Attribute befüllen' wird ersetzt; die Bereinigungsliste $script:CreatedUsers bleibt erhalten
+    $script:LastCsvImportUsers.Clear()
+    $createdCount = 0
+    $errorCount = 0
+
     # HashSet für SamAccountName-Duplikate zur Laufzeit
     $usedSamAccountNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $usedUpns = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $managerCache = @{}
-    $usesRandomPasswords = -not ($Global:GuiControls.PasswordBoxInitialPassword -and $Global:GuiControls.PasswordBoxInitialPassword.SecurePassword.Length -gt 0)
-    $csvRows = @($Global:CsvData)
- 
-    for ($i = 0; $i -lt $csvRows.Count; $i++) { 
-        if ($createdCount -ge $numUsersToCreate) { break } 
- 
-        $csvRow = $csvRows[$i] 
-        $userParams = @{ 
-            Path    = $targetOU 
+    $usesRandomPasswords = -not ($script:GuiControls.PasswordBoxInitialPassword -and $script:GuiControls.PasswordBoxInitialPassword.SecurePassword.Length -gt 0)
+    $csvRows = @($script:CsvData)
+
+    for ($i = 0; $i -lt $csvRows.Count; $i++) {
+        if ($createdCount -ge $numUsersToCreate) { break }
+
+        $csvRow = $csvRows[$i]
+        $userParams = @{
+            Path    = $targetOU
             Enabled = $true
-            ChangePasswordAtLogon = $Global:AppConfig.EnablePasswordChange # Wert aus globaler Konfiguration verwenden
+            ChangePasswordAtLogon = $script:AppConfig.EnablePasswordChange # Wert aus globaler Konfiguration verwenden
             AccountPassword = (Get-InitialUserPassword) # GUI-Eingabe oder zufälliges Passwort pro Benutzer (kein Standardpasswort)
-        } 
+        }
         $otherAttributes = @{}
- 
-        # Standard Name, falls nicht anders spezifiziert 
-        $userParams.Name = if ($csvRow.PSObject.Properties["DisplayName"]) { $csvRow.DisplayName } elseif ($csvRow.PSObject.Properties["FirstName"] -and $csvRow.PSObject.Properties["LastName"]) { "$($csvRow.FirstName) $($csvRow.LastName)" } else { $csvRow.SamAccountName } 
-         
-        foreach ($checkBox in $selectedAttributesCheckboxes) { 
-            $attrInfo = $checkBox.Tag 
-            if ($csvRow.PSObject.Properties[$attrInfo.CsvHeader]) { 
-                $value = $csvRow.($attrInfo.CsvHeader) 
-                if (-not [string]::IsNullOrWhiteSpace($value)) { 
-                    # Spezielle Behandlung für bestimmte Attribute 
-                    if ($attrInfo.Name -eq "Country") { 
+
+        # Standard Name, falls nicht anders spezifiziert
+        $userParams.Name = if ($csvRow.PSObject.Properties["DisplayName"]) { $csvRow.DisplayName } elseif ($csvRow.PSObject.Properties["FirstName"] -and $csvRow.PSObject.Properties["LastName"]) { "$($csvRow.FirstName) $($csvRow.LastName)" } else { $csvRow.SamAccountName }
+
+        foreach ($checkBox in $selectedAttributesCheckboxes) {
+            $attrInfo = $checkBox.Tag
+            if ($csvRow.PSObject.Properties[$attrInfo.CsvHeader]) {
+                $value = $csvRow.($attrInfo.CsvHeader)
+                if (-not [string]::IsNullOrWhiteSpace($value)) {
+                    # Spezielle Behandlung für bestimmte Attribute
+                    if ($attrInfo.Name -eq "Country") {
                         # AD erwartet einen ISO-3166 2-Buchstaben-Code
                         $value = ConvertTo-CountryCode -Value $value
-                    } 
-                    if ($attrInfo.Name -eq "proxyAddresses") { 
-                        $value = [string[]]@($value -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) # Semikolon-getrennte Liste 
-                    } 
+                    }
+                    if ($attrInfo.Name -eq "proxyAddresses") {
+                        $value = [string[]]@($value -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) # Semikolon-getrennte Liste
+                    }
                     if ($attrInfo.Name -eq "Manager") {
                         # Manager muss als DN/SamAccountName aufgelöst werden (CSV enthält ggf. Mailadressen)
                         $value = Resolve-ADUserReference -Reference $value -Cache $managerCache
                         if (-not $value) {
-                            Write-Log "Manager '$($csvRow.($attrInfo.CsvHeader))' für Zeile $($i+1) nicht gefunden - Attribut wird ausgelassen." -Level "WARN"
+                            Write-AppLog "Manager '$($csvRow.($attrInfo.CsvHeader))' für Zeile $($i+1) nicht gefunden - Attribut wird ausgelassen." -Level "WARN"
                             continue
                         }
                     }
-                    if ($Global:ADUserOtherAttributeNames -contains $attrInfo.Name) {
+                    if ($script:ADUserOtherAttributeNames -contains $attrInfo.Name) {
                         # Kein eigener New-ADUser-Parameter -> über -OtherAttributes setzen
-                        $otherAttributes[$Global:ADAttributeLdapNames[$attrInfo.Name]] = $value
+                        $otherAttributes[$script:ADAttributeLdapNames[$attrInfo.Name]] = $value
                     } else {
-                        $userParams[$attrInfo.Name] = $value 
+                        $userParams[$attrInfo.Name] = $value
                     }
-                } 
-            } 
-        } 
- 
-        # SamAccountName ist zwingend erforderlich 
-        if (-not $userParams.ContainsKey("SamAccountName") -or [string]::IsNullOrWhiteSpace($userParams.SamAccountName)) { 
-            Write-Log "Fehler: SamAccountName fehlt oder ist leer für Zeile $($i+1). Benutzer wird übersprungen." -Level "ERROR" 
-            $errorCount++ 
-            continue 
+                }
+            }
+        }
+
+        # SamAccountName ist zwingend erforderlich
+        if (-not $userParams.ContainsKey("SamAccountName") -or [string]::IsNullOrWhiteSpace($userParams.SamAccountName)) {
+            Write-AppLog "Fehler: SamAccountName fehlt oder ist leer für Zeile $($i+1). Benutzer wird übersprungen." -Level "ERROR"
+            $errorCount++
+            continue
         }
 
         # SamAccountName für AD-Kompatibilität normalisieren
         $originalSamAccountName = $userParams.SamAccountName
-        $userParams.SamAccountName = Normalize-SamAccountName -SamAccountName $originalSamAccountName -ExistingNames $usedSamAccountNames
-        
+        $userParams.SamAccountName = ConvertTo-NormalizedSamAccountName -SamAccountName $originalSamAccountName -ExistingNames $usedSamAccountNames
+
         if ($originalSamAccountName -ne $userParams.SamAccountName) {
-            Write-Log "SamAccountName normalisiert für Zeile $($i+1): '$originalSamAccountName' → '$($userParams.SamAccountName)'" -Level "INFO"
+            Write-AppLog "SamAccountName normalisiert für Zeile $($i+1): '$originalSamAccountName' → '$($userParams.SamAccountName)'" -Level "INFO"
         }
 
         # Fortschritt aktualisieren
@@ -2273,17 +2332,17 @@ function New-ADUsersFromCsv {
         } else {
             "Erstelle Benutzer ($($userParams.SamAccountName))"
         }
-        Update-Progress -Current ($i + 1) -Total $numUsersToCreate -Text $progressText
+        Write-GuiProgress -Current ($i + 1) -Total $numUsersToCreate -Text $progressText
 
         # Automatische UPN-Generierung, falls nicht bereits in CSV vorhanden
         if (-not $userParams.ContainsKey("UserPrincipalName") -or [string]::IsNullOrWhiteSpace($userParams.UserPrincipalName)) {
-            $userParams.UserPrincipalName = Generate-UPN -SamAccountName $userParams.SamAccountName
-            Write-Log "UPN automatisch generiert: $($userParams.UserPrincipalName)" -Level "DEBUG"
+            $userParams.UserPrincipalName = Get-UserPrincipalName -SamAccountName $userParams.SamAccountName
+            Write-AppLog "UPN automatisch generiert: $($userParams.UserPrincipalName)" -Level "DEBUG"
         }
-        
+
         # UPN auf Eindeutigkeit prüfen (innerhalb des Laufs und im AD)
         if (-not $usedUpns.Add([string]$userParams.UserPrincipalName)) {
-            Write-Log "UPN '$($userParams.UserPrincipalName)' kommt in der CSV mehrfach vor. Benutzer wird übersprungen." -Level "WARN"
+            Write-AppLog "UPN '$($userParams.UserPrincipalName)' kommt in der CSV mehrfach vor. Benutzer wird übersprungen." -Level "WARN"
             $errorCount++
             continue
         }
@@ -2291,88 +2350,73 @@ function New-ADUsersFromCsv {
             $upnFilterValue = ConvertTo-ADFilterValue -Value $userParams.UserPrincipalName
             $existingUser = Get-ADUser -Filter "UserPrincipalName -eq '$upnFilterValue'" -ErrorAction Stop
             if ($existingUser) {
-                Write-Log "UPN '$($userParams.UserPrincipalName)' existiert bereits für Benutzer '$($existingUser.SamAccountName)'. Benutzer wird übersprungen." -Level "WARN"
+                Write-AppLog "UPN '$($userParams.UserPrincipalName)' existiert bereits für Benutzer '$($existingUser.SamAccountName)'. Benutzer wird übersprungen." -Level "WARN"
                 $errorCount++
                 continue
             }
         } catch {
             # Prüfung ist optional - New-ADUser meldet echte Konflikte selbst
-            Write-Log "UPN-Prüfung für '$($userParams.UserPrincipalName)' fehlgeschlagen: $($_.Exception.Message)" -Level "DEBUG"
+            Write-AppLog "UPN-Prüfung für '$($userParams.UserPrincipalName)' fehlgeschlagen: $($_.Exception.Message)" -Level "DEBUG"
         }
- 
+
         if ($otherAttributes.Count -gt 0) {
             $userParams.OtherAttributes = $otherAttributes
         }
 
-        try { 
-            Write-Log "Erstelle Benutzer: $($userParams.SamAccountName)" -Level "DEBUG" 
-            $newUser = New-ADUser @userParams -PassThru -ErrorAction Stop 
-            Write-Log "Benutzer '$($newUser.SamAccountName)' erfolgreich erstellt." -Level "SUCCESS" 
-            $Global:CreatedUsers.Add($newUser.SamAccountName) # Speichere nur SamAccountName für spätere Aktionen
-            $createdCount++ 
-        } catch { 
-            Write-Log "Fehler beim Erstellen des Benutzers '$($userParams.SamAccountName)': $($_.Exception.Message)" -Level "ERROR" 
-            $errorCount++ 
-        } 
+        try {
+            Write-AppLog "Erstelle Benutzer: $($userParams.SamAccountName)" -Level "DEBUG"
+            $newUser = New-ADUser @userParams -PassThru -ErrorAction Stop
+            Write-AppLog "Benutzer '$($newUser.SamAccountName)' erfolgreich erstellt." -Level "SUCCESS"
+            $script:CreatedUsers.Add($newUser.SamAccountName) # Speichere nur SamAccountName für spätere Aktionen
+            $script:LastCsvImportUsers.Add([PSCustomObject]@{ SamAccountName = $newUser.SamAccountName; RowIndex = $i })
+            $createdCount++
+        } catch {
+            Write-AppLog "Fehler beim Erstellen des Benutzers '$($userParams.SamAccountName)': $($_.Exception.Message)" -Level "ERROR"
+            $errorCount++
+        }
     }
 
     # Fortschrittsanzeige ausblenden
     Hide-Progress
-    
-    Write-Log "Benutzererstellung abgeschlossen. $createdCount erfolgreich erstellt, $errorCount Fehler." -Level "INFO" 
-    Update-Statistics
+
+    Write-AppLog "Benutzererstellung abgeschlossen. $createdCount erfolgreich erstellt, $errorCount Fehler." -Level "INFO"
+    Show-CreatedObjectCount
     $passwordHint = if ($usesRandomPasswords) { "`n`nHinweis: Es wurde kein Initial-Passwort angegeben. Jeder Benutzer hat ein eigenes, zufälliges Passwort erhalten (nicht gespeichert). Setzen Sie bei Bedarf ein Passwort per 'Set-ADAccountPassword' zurück." } else { "" }
-    [System.Windows.MessageBox]::Show("Benutzererstellung abgeschlossen.`nErfolgreich: $createdCount`nFehler: $errorCount$passwordHint", "Ergebnis", "OK", "Information") 
-} 
- 
- 
-function Set-ADUserAttributesFromCsv {
-    Write-Log "Aktion 'Attribute befüllen' gestartet..."
-    if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-        Write-Log "Keine Benutzer zuvor erstellt oder Liste ist leer. Aktion abgebrochen." -Level "WARN"
-        [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer mit diesem Tool erstellt oder die Liste ist leer. Bitte erstellen Sie zuerst Benutzer.", "Hinweis", "OK", "Warning")
+    [System.Windows.MessageBox]::Show("Benutzererstellung abgeschlossen.`nErfolgreich: $createdCount`nFehler: $errorCount$passwordHint", "Ergebnis", "OK", "Information")
+}
+
+
+function Set-ADUserAttributeFromCsv {
+    <#
+    .SYNOPSIS
+    Überschreibt Attribute der Benutzer aus dem letzten CSV-Import mit den Werten der aktuell geladenen CSV
+    .DESCRIPTION
+    Verwendet ausschließlich die Benutzer des letzten Laufs von 'Benutzer aus CSV erstellen' ($script:LastCsvImportUsers).
+    Jeder Benutzer erhält die Werte der CSV-Zeile, aus der er erstellt wurde (gleiche Zeilennummer in der aktuell geladenen CSV).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Aktion 'Attribute befüllen' gestartet..."
+    if ($script:LastCsvImportUsers.Count -eq 0) {
+        Write-AppLog "Keine Benutzer aus einem CSV-Import vorhanden. Aktion abgebrochen." -Level "WARN"
+        [System.Windows.MessageBox]::Show("'Attribute befüllen' bezieht sich nur auf die Benutzer, die beim letzten Lauf von 'Benutzer aus CSV erstellen' angelegt wurden.`n`nIn dieser Sitzung wurden noch keine Benutzer aus einer CSV erstellt (oder sie wurden inzwischen gelöscht). Zufällig oder per Vorlage erstellte Benutzer werden hier nicht berücksichtigt.", "Hinweis", "OK", "Warning") | Out-Null
         return
     }
 
-    if (-not $Global:CsvData) {
-        Write-Log "Keine CSV-Daten geladen. Aktion abgebrochen." -Level "WARN"
+    if (-not $script:CsvData) {
+        Write-AppLog "Keine CSV-Daten geladen. Aktion abgebrochen." -Level "WARN"
         [System.Windows.MessageBox]::Show("Bitte laden Sie zuerst eine CSV-Datei, die die neuen Attributwerte enthält.", "Hinweis", "OK", "Warning")
         return
     }
 
-    $numUsersForActionText = $Global:GuiControls.TextBoxNumUsersForAction.Text
-    $numUsersToUpdate = 0
-    if ([string]::IsNullOrWhiteSpace($numUsersForActionText)) {
-        $numUsersToUpdate = $Global:CreatedUsers.Count # Default to all created users
-        Write-Log "Keine Anzahl für Aktion angegeben, verwende alle $($Global:CreatedUsers.Count) erstellten Benutzer."
-    } elseif ($numUsersForActionText -match '^\d+$') {
-        $numUsersToUpdate = [int]$numUsersForActionText
-    } else {
-        Write-Log "Ungültige Eingabe für 'Anzahl Benutzer für Aktion': '$numUsersForActionText'. Muss eine Zahl sein." -Level "WARN"
-        [System.Windows.MessageBox]::Show("Die Eingabe für 'Anzahl Benutzer für Aktion' ist ungültig. Bitte geben Sie eine Zahl ein.", "Fehler", "OK", "Error")
-        return
-    }
-
-    if ($numUsersToUpdate -le 0) {
-        Write-Log "Anzahl der zu aktualisierenden Benutzer muss größer als 0 sein." -Level "WARN"
-        [System.Windows.MessageBox]::Show("Die Anzahl der Benutzer für diese Aktion muss größer als 0 sein.", "Hinweis", "OK", "Warning")
-        return
-    }
-    
-    if ($numUsersToUpdate -gt $Global:CreatedUsers.Count) {
-        Write-Log "Angeforderte Anzahl ($numUsersToUpdate) übersteigt Anzahl erstellter Benutzer ($($Global:CreatedUsers.Count)). Reduziere auf Maximum." -Level "WARN"
-        $numUsersToUpdate = $Global:CreatedUsers.Count
-    }
-    
-    if ($numUsersToUpdate -gt $Global:CsvData.Count) {
-        Write-Log "Angeforderte Anzahl ($numUsersToUpdate) übersteigt Anzahl der CSV-Einträge ($($Global:CsvData.Count)). Aktion nicht möglich für alle angeforderten Benutzer." -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Nicht genügend Einträge in der CSV-Datei vorhanden, um $numUsersToUpdate Benutzer zu aktualisieren (nur $($Global:CsvData.Count) CSV-Zeilen).", "Fehler", "OK", "Error")
-        return
-    }
+    $numUsersToUpdate = Get-ActionUserCount -Available $script:LastCsvImportUsers.Count
+    if ($numUsersToUpdate -lt 0) { return }
+    $csvRows = @($script:CsvData)
 
     $selectedAttributesToSetInfo = @{}
     $anyAttributeSelected = $false
-    foreach ($checkBox in $Global:GuiControls.StackPanelAttributeSelection.Children) {
+    foreach ($checkBox in $script:GuiControls.StackPanelAttributeSelection.Children) {
         if ($checkBox.IsChecked -eq $true) {
             $attrInfo = $checkBox.Tag
             if ($attrInfo) {
@@ -2386,11 +2430,22 @@ function Set-ADUserAttributesFromCsv {
     }
 
     if (-not $anyAttributeSelected) {
-        Write-Log "Keine Attribute zum Befüllen ausgewählt." -Level "WARN"
+        Write-AppLog "Keine Attribute zum Befüllen ausgewählt." -Level "WARN"
         [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens ein Attribut aus, das befüllt werden soll.", "Hinweis", "OK", "Warning")
         return
     }
-    Write-Log "Folgende Attribute wurden zum Befüllen ausgewählt: $($selectedAttributesToSetInfo.Keys -join ', ')"
+    Write-AppLog "Folgende Attribute wurden zum Befüllen ausgewählt: $($selectedAttributesToSetInfo.Keys -join ', ')"
+
+    $result = [System.Windows.MessageBox]::Show(
+        "Sollen bei $numUsersToUpdate Benutzer(n) aus dem letzten CSV-Import die ausgewählten Attribute mit den Werten der aktuell geladenen CSV überschrieben werden?`n`n" +
+        "Zuordnung: Jeder Benutzer erhält die Werte der CSV-Zeile, aus der er erstellt wurde.`n" +
+        "Attribute: $($selectedAttributesToSetInfo.Keys -join ', ')",
+        "Attribute befüllen",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess("$numUsersToUpdate Benutzer aus dem letzten CSV-Import", "Attribute aus CSV setzen")) { return }
 
     # Fortschrittsanzeige aktivieren
     Show-Progress -Text "Starte Attribut-Update..." -Value 0
@@ -2400,14 +2455,21 @@ function Set-ADUserAttributesFromCsv {
     $managerCache = @{}
 
     for ($i = 0; $i -lt $numUsersToUpdate; $i++) {
-        $samAccountName = $Global:CreatedUsers[$i]
-        $csvRow = $Global:CsvData[$i]
+        $importEntry = $script:LastCsvImportUsers[$i]
+        $samAccountName = $importEntry.SamAccountName
 
         # Fortschritt aktualisieren
-        Update-Progress -Current ($i + 1) -Total $numUsersToUpdate -Text "Aktualisiere Benutzerattribute"
+        Write-GuiProgress -Current ($i + 1) -Total $numUsersToUpdate -Text "Aktualisiere Benutzerattribute"
 
-        Write-Log "Verarbeite Benutzer '$samAccountName' (Datensatz $($i+1) aus CSV)..."
-                $attributesForReplaceCmd = @{}
+        if ($importEntry.RowIndex -ge $csvRows.Count) {
+            Write-AppLog "Für '$samAccountName' gibt es in der aktuell geladenen CSV keine Zeile $($importEntry.RowIndex + 1). Übersprungen." -Level "WARN"
+            $usersFailed++
+            continue
+        }
+        $csvRow = $csvRows[$importEntry.RowIndex]
+
+        Write-AppLog "Verarbeite Benutzer '$samAccountName' (Datensatz $($importEntry.RowIndex + 1) aus CSV)..."
+        $attributesForReplaceCmd = @{}
 
         foreach ($attrNameKey in $selectedAttributesToSetInfo.Keys) {
             $csvHeaderName = $selectedAttributesToSetInfo[$attrNameKey]
@@ -2428,7 +2490,7 @@ function Set-ADUserAttributesFromCsv {
                             if ($managerDn) {
                                 $attributesForReplaceCmd[$attrNameKey] = $managerDn
                             } else {
-                                Write-Log "  Manager '$valueFromCsv' nicht gefunden für Benutzer '$samAccountName'" -Level "WARN"
+                                Write-AppLog "  Manager '$valueFromCsv' nicht gefunden für Benutzer '$samAccountName'" -Level "WARN"
                             }
                         }
                         "Country" {
@@ -2448,12 +2510,12 @@ function Set-ADUserAttributesFromCsv {
                             $attributesForReplaceCmd[$attrNameKey] = $valueFromCsv
                         }
                     }
-                    Write-Log "  Setze '$attrNameKey' auf '$($attributesForReplaceCmd[$attrNameKey])' (aus CSV-Spalte '$csvHeaderName')"
+                    Write-AppLog "  Setze '$attrNameKey' auf '$($attributesForReplaceCmd[$attrNameKey])' (aus CSV-Spalte '$csvHeaderName')"
                 } else {
-                    Write-Log "  Wert für '$attrNameKey' (aus CSV '$csvHeaderName') ist leer. Attribut wird für '$samAccountName' nicht geändert." -Level "INFO"
+                    Write-AppLog "  Wert für '$attrNameKey' (aus CSV '$csvHeaderName') ist leer. Attribut wird für '$samAccountName' nicht geändert." -Level "INFO"
                 }
             } else {
-                Write-Log "  CSV-Spalte '$csvHeaderName' für Attribut '$attrNameKey' nicht im aktuellen CSV-Datensatz gefunden." -Level "WARN"
+                Write-AppLog "  CSV-Spalte '$csvHeaderName' für Attribut '$attrNameKey' nicht im aktuellen CSV-Datensatz gefunden." -Level "WARN"
             }
         }
 
@@ -2461,19 +2523,19 @@ function Set-ADUserAttributesFromCsv {
             # Parameternamen (z.B. Surname, City) in LDAP-Attributnamen (sn, l) für -Replace übersetzen
             $ldapReplace = @{}
             foreach ($key in $attributesForReplaceCmd.Keys) {
-                $ldapName = if ($Global:ADAttributeLdapNames.ContainsKey($key)) { $Global:ADAttributeLdapNames[$key] } else { $key }
+                $ldapName = if ($script:ADAttributeLdapNames.ContainsKey($key)) { $script:ADAttributeLdapNames[$key] } else { $key }
                 $ldapReplace[$ldapName] = $attributesForReplaceCmd[$key]
             }
             try {
                 Set-ADUser -Identity $samAccountName -Replace $ldapReplace -ErrorAction Stop
-                Write-Log "Benutzer '$samAccountName' erfolgreich aktualisiert." -Level "SUCCESS"
+                Write-AppLog "Benutzer '$samAccountName' erfolgreich aktualisiert." -Level "SUCCESS"
                 $usersProcessed++
             } catch {
-                Write-Log "Fehler beim Aktualisieren von Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Aktualisieren von Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
                 $usersFailed++
             }
         } else {
-            Write-Log "Keine gültigen Attributwerte zum Aktualisieren für Benutzer '$samAccountName' gefunden. Übersprungen." -Level "INFO"
+            Write-AppLog "Keine gültigen Attributwerte zum Aktualisieren für Benutzer '$samAccountName' gefunden. Übersprungen." -Level "INFO"
         }
     }
 
@@ -2481,80 +2543,109 @@ function Set-ADUserAttributesFromCsv {
     Hide-Progress
 
     $summaryMessage = "Aktion 'Attribute befüllen' abgeschlossen. $usersProcessed Benutzer erfolgreich aktualisiert, $usersFailed Fehler."
-    Write-Log $summaryMessage -Level "INFO"
+    Write-AppLog $summaryMessage -Level "INFO"
     [System.Windows.MessageBox]::Show($summaryMessage, "Aktion abgeschlossen", "OK", "Information")
 }
 
-function Disable-CreatedADUsers {
-    Write-Log "Aktion 'User deaktivieren' gestartet..."
-    if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-        Write-Log "Keine Benutzer zuvor erstellt. Aktion abgebrochen." -Level "WARN"
+function Get-ActionUserCount {
+    <#
+    .SYNOPSIS
+    Liest das Feld 'Anzahl Benutzer für Aktion' aus (leer = alle) und begrenzt den Wert auf die verfügbare Anzahl
+    .OUTPUTS
+    Anzahl der zu bearbeitenden Benutzer oder -1 bei ungültiger Eingabe
+    #>
+    param([Parameter(Mandatory = $true)][int]$Available)
+
+    $text = ([string]$script:GuiControls.TextBoxNumUsersForAction.Text).Trim()
+    if (-not $text) { return $Available }
+    $count = ConvertTo-IntOrZero -Value $text
+    if ($count -le 0) {
+        Write-AppLog "Ungültige Eingabe für 'Anzahl Benutzer für Aktion': '$text'" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Die Eingabe für 'Anzahl Benutzer für Aktion' ist ungültig. Bitte geben Sie eine positive Zahl ein oder lassen Sie das Feld leer (= alle).", "Hinweis", "OK", "Warning") | Out-Null
+        return -1
+    }
+    return [math]::Min($count, $Available)
+}
+
+function Disable-CreatedADUser {
+    Write-AppLog "Aktion 'Benutzer deaktivieren' gestartet..."
+    if (-not $script:CreatedUsers -or $script:CreatedUsers.Count -eq 0) {
+        Write-AppLog "Keine Benutzer zuvor erstellt. Aktion abgebrochen." -Level "WARN"
         [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer mit diesem Tool erstellt.", "Hinweis", "OK", "Warning")
         return
     }
 
     $result = [System.Windows.MessageBox]::Show("Sind Sie sicher, dass Sie die erstellten Benutzer deaktivieren möchten?", "Bestätigung", "YesNo", "Question")
     if ($result -ne "Yes") {
-        Write-Log "Benutzer-Deaktivierung abgebrochen." -Level "INFO"
+        Write-AppLog "Benutzer-Deaktivierung abgebrochen." -Level "INFO"
         return
     }
 
-    $numUsersForActionText = $Global:GuiControls.TextBoxNumUsersForAction.Text
-    $numUsersToDisable = if ([string]::IsNullOrWhiteSpace($numUsersForActionText)) { $Global:CreatedUsers.Count } else { [int]$numUsersForActionText }
+    $numUsersToDisable = Get-ActionUserCount -Available $script:CreatedUsers.Count
+    if ($numUsersToDisable -lt 0) { return }
 
     $usersProcessed = 0
     $usersFailed = 0
+    $usersToDisable = @($script:CreatedUsers | Select-Object -First $numUsersToDisable)
 
-    for ($i = 0; $i -lt [Math]::Min($numUsersToDisable, $Global:CreatedUsers.Count); $i++) {
-        $samAccountName = $Global:CreatedUsers[$i]
+    Show-Progress -Text "Deaktiviere Benutzer..."
+    for ($i = 0; $i -lt $usersToDisable.Count; $i++) {
+        $samAccountName = $usersToDisable[$i]
+        Write-GuiProgress -Current ($i + 1) -Total $usersToDisable.Count -Text "Deaktiviere $samAccountName"
         try {
             Disable-ADAccount -Identity $samAccountName -ErrorAction Stop
-            Write-Log "Benutzer '$samAccountName' erfolgreich deaktiviert." -Level "SUCCESS"
+            Write-AppLog "Benutzer '$samAccountName' erfolgreich deaktiviert." -Level "SUCCESS"
             $usersProcessed++
         } catch {
-            Write-Log "Fehler beim Deaktivieren von Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
+            Write-AppLog "Fehler beim Deaktivieren von Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
             $usersFailed++
         }
     }
 
-    $summaryMessage = "Aktion 'User deaktivieren' abgeschlossen. $usersProcessed Benutzer deaktiviert, $usersFailed Fehler."
-    Write-Log $summaryMessage -Level "INFO"
+    Hide-Progress
+
+    $summaryMessage = "Aktion 'Benutzer deaktivieren' abgeschlossen. $usersProcessed Benutzer deaktiviert, $usersFailed Fehler."
+    Write-AppLog $summaryMessage -Level "INFO"
     [System.Windows.MessageBox]::Show($summaryMessage, "Aktion abgeschlossen", "OK", "Information")
 }
 
-function Remove-CreatedADUsers {
-    Write-Log "Aktion 'User löschen' gestartet..."
-    if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-        Write-Log "Keine Benutzer zuvor erstellt. Aktion abgebrochen." -Level "WARN"
+function Remove-CreatedADUser {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Aktion 'Benutzer löschen' gestartet..."
+    if (-not $script:CreatedUsers -or $script:CreatedUsers.Count -eq 0) {
+        Write-AppLog "Keine Benutzer zuvor erstellt. Aktion abgebrochen." -Level "WARN"
         [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer mit diesem Tool erstellt.", "Hinweis", "OK", "Warning")
         return
     }
 
     $result = [System.Windows.MessageBox]::Show("WARNUNG: Diese Aktion löscht die erstellten Benutzer UNWIDERRUFLICH!`n`nSind Sie sicher?", "VORSICHT - Benutzer löschen", "YesNo", "Warning")
     if ($result -ne "Yes") {
-        Write-Log "Benutzer-Löschung abgebrochen." -Level "INFO"
+        Write-AppLog "Benutzer-Löschung abgebrochen." -Level "INFO"
         return
     }
 
-    $numUsersForActionText = $Global:GuiControls.TextBoxNumUsersForAction.Text
-    $numUsersToDelete = if ([string]::IsNullOrWhiteSpace($numUsersForActionText)) { $Global:CreatedUsers.Count } else { [int]$numUsersForActionText }
+    $numUsersToDelete = Get-ActionUserCount -Available $script:CreatedUsers.Count
+    if ($numUsersToDelete -lt 0) { return }
+    if (-not $PSCmdlet.ShouldProcess("$numUsersToDelete vom Tool erstellte Benutzer", "Löschen")) { return }
 
     $usersProcessed = 0
     $usersFailed = 0
     $deletedUsers = New-Object System.Collections.Generic.List[string]
 
-    # Nur Benutzer löschen, die von diesem Tool erstellt wurden (Liste $Global:CreatedUsers)
-    $usersToDelete = @($Global:CreatedUsers | Select-Object -First ([Math]::Min($numUsersToDelete, $Global:CreatedUsers.Count)))
+    # Nur Benutzer löschen, die von diesem Tool erstellt wurden (Liste $script:CreatedUsers)
+    $usersToDelete = @($script:CreatedUsers | Select-Object -First $numUsersToDelete)
     for ($i = 0; $i -lt $usersToDelete.Count; $i++) {
         $samAccountName = $usersToDelete[$i]
-        Update-Progress -Current ($i + 1) -Total $usersToDelete.Count -Text "Lösche Benutzer: $samAccountName"
+        Write-GuiProgress -Current ($i + 1) -Total $usersToDelete.Count -Text "Lösche Benutzer: $samAccountName"
         try {
             Remove-ADUser -Identity $samAccountName -Confirm:$false -ErrorAction Stop
-            Write-Log "Benutzer '$samAccountName' erfolgreich gelöscht." -Level "SUCCESS"
+            Write-AppLog "Benutzer '$samAccountName' erfolgreich gelöscht." -Level "SUCCESS"
             $deletedUsers.Add($samAccountName)
             $usersProcessed++
         } catch {
-            Write-Log "Fehler beim Löschen von Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
+            Write-AppLog "Fehler beim Löschen von Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
             $usersFailed++
         }
     }
@@ -2562,19 +2653,20 @@ function Remove-CreatedADUsers {
 
     # Nur tatsächlich gelöschte Benutzer aus der Liste entfernen (fehlgeschlagene bleiben nachverfolgbar)
     foreach ($deletedUser in $deletedUsers) {
-        [void]$Global:CreatedUsers.Remove($deletedUser)
+        [void]$script:CreatedUsers.Remove($deletedUser)
+        [void]$script:LastCsvImportUsers.RemoveAll([Predicate[object]] { param($entry) $entry.SamAccountName -eq $deletedUser })
     }
-    Update-Statistics
+    Show-CreatedObjectCount
 
-    $summaryMessage = "Aktion 'User löschen' abgeschlossen. $usersProcessed Benutzer gelöscht, $usersFailed Fehler."
-    Write-Log $summaryMessage -Level "INFO"
+    $summaryMessage = "Aktion 'Benutzer löschen' abgeschlossen. $usersProcessed Benutzer gelöscht, $usersFailed Fehler."
+    Write-AppLog $summaryMessage -Level "INFO"
     [System.Windows.MessageBox]::Show($summaryMessage, "Aktion abgeschlossen", "OK", "Information")
 }
 
-function Export-CreatedUsers {
-    Write-Log "Export der erstellten Benutzer gestartet..."
-    if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-        Write-Log "Keine Benutzer zum Exportieren vorhanden." -Level "WARN"
+function Export-CreatedUser {
+    Write-AppLog "Export der erstellten Benutzer gestartet..."
+    if (-not $script:CreatedUsers -or $script:CreatedUsers.Count -eq 0) {
+        Write-AppLog "Keine Benutzer zum Exportieren vorhanden." -Level "WARN"
         [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer erstellt oder alle wurden bereits gelöscht.", "Hinweis", "OK", "Warning")
         return
     }
@@ -2582,8 +2674,8 @@ function Export-CreatedUsers {
     try {
         $exportPath = Get-ExportFilePath -FileName "Created_Users_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
         $exportData = New-Object System.Collections.Generic.List[object]
-        
-        foreach ($samAccountName in $Global:CreatedUsers) {
+
+        foreach ($samAccountName in $script:CreatedUsers) {
             try {
                 $user = Get-ADUser -Identity $samAccountName -Properties DisplayName, EmailAddress, Created -ErrorAction Stop
                 $exportData.Add([PSCustomObject]@{
@@ -2598,7 +2690,7 @@ function Export-CreatedUsers {
                     DistinguishedName = $user.DistinguishedName
                 })
             } catch {
-                Write-Log "Fehler beim Abrufen der Details für Benutzer '$samAccountName': $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler beim Abrufen der Details für Benutzer '$samAccountName': $($_.Exception.Message)" -Level "WARN"
                 $exportData.Add([PSCustomObject]@{
                     SamAccountName = $samAccountName
                     DisplayName = "Fehler beim Abrufen"
@@ -2614,10 +2706,10 @@ function Export-CreatedUsers {
         }
 
         $exportData | Export-Csv -Path $exportPath -NoTypeInformation -Encoding UTF8
-        Write-Log "Export erfolgreich: $exportPath" -Level "SUCCESS"
+        Write-AppLog "Export erfolgreich: $exportPath" -Level "SUCCESS"
         [System.Windows.MessageBox]::Show("Benutzerliste erfolgreich exportiert nach:`n$exportPath", "Export abgeschlossen", "OK", "Information")
     } catch {
-        Write-Log "Fehler beim Export: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Export: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler beim Exportieren der Benutzerliste:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
@@ -2628,270 +2720,234 @@ function Show-CsvBrowser {
         $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
         $openFileDialog.Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*"
         $openFileDialog.Title = "CSV-Datei auswählen"
-        $initialDir = $Global:AppConfig.ScriptRoot
-        if (-not [string]::IsNullOrWhiteSpace($Global:GuiControls.TextBoxCsvPath.Text)) {
-            $csvDir = Split-Path -Path $Global:GuiControls.TextBoxCsvPath.Text -Parent
+        $initialDir = $script:AppConfig.ScriptRoot
+        if (-not [string]::IsNullOrWhiteSpace($script:GuiControls.TextBoxCsvPath.Text)) {
+            $csvDir = Split-Path -Path $script:GuiControls.TextBoxCsvPath.Text -Parent
             if ($csvDir -and (Test-Path -LiteralPath $csvDir -PathType Container)) { $initialDir = (Resolve-Path -LiteralPath $csvDir).ProviderPath }
         }
         $openFileDialog.InitialDirectory = $initialDir
 
         if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $Global:GuiControls.TextBoxCsvPath.Text = $openFileDialog.FileName
-            Write-Log "CSV-Pfad ausgewählt: $($openFileDialog.FileName)" -Level "INFO"
+            $script:GuiControls.TextBoxCsvPath.Text = $openFileDialog.FileName
+            Write-AppLog "CSV-Pfad ausgewählt: $($openFileDialog.FileName)" -Level "INFO"
         }
     } catch {
-        Write-Log "Fehler beim Öffnen des Datei-Browsers: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Öffnen des Datei-Browsers: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler beim Öffnen des Datei-Browsers. Bitte geben Sie den Pfad manuell ein.", "Fehler", "OK", "Error")
     }
 }
 
-function Apply-SecuritySettings {
-    Write-Log "Anwenden kritischer Sicherheitseinstellungen gestartet..."
-    if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-        Write-Log "Keine Benutzer zuvor erstellt. Aktion abgebrochen." -Level "WARN"
+function Set-CriticalSecuritySetting {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Anwenden kritischer Sicherheitseinstellungen gestartet..."
+    if (-not $script:CreatedUsers -or $script:CreatedUsers.Count -eq 0) {
+        Write-AppLog "Keine Benutzer zuvor erstellt. Aktion abgebrochen." -Level "WARN"
         [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer mit diesem Tool erstellt.", "Hinweis", "OK", "Warning")
         return
     }
 
     $result = [System.Windows.MessageBox]::Show("WARNUNG: Sie sind dabei, kritische Sicherheitseinstellungen zu ändern!`n`nDies kann Ihre Domäne gefährden. Sind Sie sicher?", "KRITISCHE SICHERHEITSWARNUNG", "YesNo", "Warning")
     if ($result -ne "Yes") {
-        Write-Log "Anwendung kritischer Sicherheitseinstellungen abgebrochen." -Level "INFO"
+        Write-AppLog "Anwendung kritischer Sicherheitseinstellungen abgebrochen." -Level "INFO"
         return
     }
 
-    $numUsersForActionText = $Global:GuiControls.TextBoxNumUsersForAction.Text
-    $numUsersToModify = if ([string]::IsNullOrWhiteSpace($numUsersForActionText)) { $Global:CreatedUsers.Count } else { [int]$numUsersForActionText }
+    $pwdNotExpires = [bool]$script:GuiControls.CheckBoxPwdNotExpires.IsChecked
+    $revPwd = [bool]$script:GuiControls.CheckBoxRevPwd.IsChecked
+    if (-not ($pwdNotExpires -or $revPwd)) {
+        Write-AppLog "Keine kritische Einstellung ausgewählt." -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens eine Einstellung aus.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+
+    $numUsersToModify = Get-ActionUserCount -Available $script:CreatedUsers.Count
+    if ($numUsersToModify -lt 0) { return }
+    if (-not $PSCmdlet.ShouldProcess("$numUsersToModify vom Tool erstellte Benutzer", "Kritische Sicherheitseinstellungen setzen")) { return }
 
     $usersProcessed = 0
     $usersFailed = 0
+    $usersToModify = @($script:CreatedUsers | Select-Object -First $numUsersToModify)
 
-    $pwdNotExpires = $Global:GuiControls.CheckBoxPwdNotExpires.IsChecked
-    $revPwd = $Global:GuiControls.CheckBoxRevPwd.IsChecked
-
-    for ($i = 0; $i -lt [Math]::Min($numUsersToModify, $Global:CreatedUsers.Count); $i++) {
-        $samAccountName = $Global:CreatedUsers[$i]
+    for ($i = 0; $i -lt $usersToModify.Count; $i++) {
+        $samAccountName = $usersToModify[$i]
         try {
             $params = @{}
-            
+
             if ($pwdNotExpires) {
                 $params.PasswordNeverExpires = $true
-                Write-Log "Setze für '$samAccountName': Passwort läuft nie ab" -Level "WARN"
+                Write-AppLog "Setze für '$samAccountName': Passwort läuft nie ab" -Level "WARN"
             }
-            
+
             if ($revPwd) {
                 $params.AllowReversiblePasswordEncryption = $true
-                Write-Log "Setze für '$samAccountName': Umgekehrte Verschlüsselung aktiviert" -Level "WARN"
+                Write-AppLog "Setze für '$samAccountName': Umkehrbare Verschlüsselung aktiviert" -Level "WARN"
             }
 
             if ($params.Count -gt 0) {
                 Set-ADUser -Identity $samAccountName @params -ErrorAction Stop
-                Write-Log "Sicherheitseinstellungen für Benutzer '$samAccountName' erfolgreich angewendet." -Level "SUCCESS"
+                Write-AppLog "Sicherheitseinstellungen für Benutzer '$samAccountName' erfolgreich angewendet." -Level "SUCCESS"
                 $usersProcessed++
             }
         } catch {
-            Write-Log "Fehler beim Anwenden der Sicherheitseinstellungen für Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
+            Write-AppLog "Fehler beim Anwenden der Sicherheitseinstellungen für Benutzer '$samAccountName': $($_.Exception.Message)" -Level "ERROR"
             $usersFailed++
         }
     }
 
     $summaryMessage = "Anwendung kritischer Sicherheitseinstellungen abgeschlossen. $usersProcessed Benutzer bearbeitet, $usersFailed Fehler."
-    Write-Log $summaryMessage -Level "INFO"
-    [System.Windows.MessageBox]::Show($summaryMessage, "Aktion abgeschlossen", "OK", "Information")
-}
-
-function Add-ToGroup {
-    Write-Log "Gruppenzuweisung gestartet..."
-    if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-        Write-Log "Keine Benutzer zuvor erstellt. Aktion abgebrochen." -Level "WARN"
-        [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer mit diesem Tool erstellt.", "Hinweis", "OK", "Warning")
-        return
-    }
-
-    $selectedGroup = $Global:GuiControls.ComboBoxCriticalGroups.SelectedItem
-    if (-not $selectedGroup) {
-        Write-Log "Keine Gruppe ausgewählt." -Level "WARN"
-        [System.Windows.MessageBox]::Show("Bitte wählen Sie eine Gruppe aus der Liste aus.", "Hinweis", "OK", "Warning")
-        return
-    }
-
-    $groupName = $selectedGroup.Content
-    $result = [System.Windows.MessageBox]::Show("EXTREM GEFAEHRLICH: Sie sind dabei, Benutzer zur Gruppe '$groupName' hinzuzufuegen!`n`nDies gibt diesen Benutzern hoechste Privilegien. Sind Sie ABSOLUT sicher?", "KRITISCHE SICHERHEITSWARNUNG", "YesNo", "Warning")
-    if ($result -ne "Yes") {
-        Write-Log "Gruppenzuweisung zu '$groupName' abgebrochen." -Level "INFO"
-        return
-    }
-
-    $numUsersForActionText = $Global:GuiControls.TextBoxNumUsersForAction.Text
-    $numUsersToAdd = if ([string]::IsNullOrWhiteSpace($numUsersForActionText)) { $Global:CreatedUsers.Count } else { [int]$numUsersForActionText }
-
-    $usersProcessed = 0
-    $usersFailed = 0
-
-    for ($i = 0; $i -lt [Math]::Min($numUsersToAdd, $Global:CreatedUsers.Count); $i++) {
-        $samAccountName = $Global:CreatedUsers[$i]
-        try {
-            Add-ADGroupMember -Identity $groupName -Members $samAccountName -ErrorAction Stop
-            Write-Log "Benutzer '$samAccountName' erfolgreich zur Gruppe '$groupName' hinzugefügt." -Level "SUCCESS"
-            $usersProcessed++
-        } catch {
-            Write-Log "Fehler beim Hinzufügen von Benutzer '$samAccountName' zur Gruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
-            $usersFailed++
-        }
-    }
-
-    $summaryMessage = "Gruppenzuweisung zu '$groupName' abgeschlossen. $usersProcessed Benutzer hinzugefügt, $usersFailed Fehler."
-    Write-Log $summaryMessage -Level "INFO"
+    Write-AppLog $summaryMessage -Level "INFO"
     [System.Windows.MessageBox]::Show($summaryMessage, "Aktion abgeschlossen", "OK", "Information")
 }
 
 function Test-ADConnection {
     try {
-        Write-Log "Prüfe Active Directory Verbindung..."
+        Write-AppLog "Prüfe Active Directory Verbindung..."
         $domain = Get-ADDomain -ErrorAction Stop
-        Write-Log "AD-Verbindung erfolgreich. Domäne: $($domain.Name)" -Level "SUCCESS"
+        Write-AppLog "AD-Verbindung erfolgreich. Domäne: $($domain.Name)" -Level "SUCCESS"
         return $true
     } catch {
-        Write-Log "Fehler bei AD-Verbindung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei AD-Verbindung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Active Directory Verbindung fehlgeschlagen:`n$($_.Exception.Message)`n`nBitte stellen Sie sicher, dass:`n- Das ActiveDirectory-Modul installiert ist`n- Sie mit einer Domäne verbunden sind`n- Sie über ausreichende Berechtigungen verfügen", "AD-Verbindungsfehler", "OK", "Error")
         return $false
     }
 }
 
-function Validate-TargetOU {
+function Test-TargetOU {
     param([string]$TargetOU)
-    
+
     if (-not $TargetOU) {
         return $false
     }
-    
+
     try {
         $ou = Get-ADOrganizationalUnit -Identity $TargetOU -ErrorAction Stop
-        Write-Log "Ziel-OU validiert: $($ou.DistinguishedName)" -Level "SUCCESS"
+        Write-AppLog "Ziel-OU validiert: $($ou.DistinguishedName)" -Level "SUCCESS"
         return $true
     } catch {
-        Write-Log "Ziel-OU nicht gefunden oder ungültig: $TargetOU - $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Ziel-OU nicht gefunden oder ungültig: $TargetOU - $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Die angegebene Ziel-OU ist ungültig oder nicht gefunden:`n$TargetOU`n`nFehler: $($_.Exception.Message)", "OU-Validierungsfehler", "OK", "Error")
         return $false
     }
 }
 
-function Register-EventHandlers { 
+function Register-EventHandler {
     # CSV-basierte Funktionen
-    if ($Global:GuiControls.ButtonBrowseCsv) { $Global:GuiControls.ButtonBrowseCsv.Add_Click({ Invoke-GuiAction { Show-CsvBrowser } }) }
-    if ($Global:GuiControls.ButtonLoadCsv) { $Global:GuiControls.ButtonLoadCsv.Add_Click({ Invoke-GuiAction { Import-CsvData } }) }
-    if ($Global:GuiControls.ButtonCreateADUsers) { $Global:GuiControls.ButtonCreateADUsers.Add_Click({ Invoke-GuiAction { New-ADUsersFromCsv } }) }
-    if ($Global:GuiControls.ButtonFillAttributes) { $Global:GuiControls.ButtonFillAttributes.Add_Click({ Invoke-GuiAction { Set-ADUserAttributesFromCsv } }) }
-    if ($Global:GuiControls.ButtonDisableUsers) { $Global:GuiControls.ButtonDisableUsers.Add_Click({ Invoke-GuiAction { Disable-CreatedADUsers } }) }
-    if ($Global:GuiControls.ButtonDeleteUsers) { $Global:GuiControls.ButtonDeleteUsers.Add_Click({ Invoke-GuiAction { Remove-CreatedADUsers } }) }
-    if ($Global:GuiControls.ButtonExportCreatedUsers) { $Global:GuiControls.ButtonExportCreatedUsers.Add_Click({ Invoke-GuiAction { Export-CreatedUsers } }) }
-    if ($Global:GuiControls.ButtonApplySecuritySettings) { $Global:GuiControls.ButtonApplySecuritySettings.Add_Click({ Invoke-GuiAction { Apply-SecuritySettings } }) }
-    #if ($Global:GuiControls.ButtonAssignToGroups) { $Global:GuiControls.ButtonAssignToGroups.Add_Click({ Invoke-GuiAction { Add-ToGroup } }) }
-    
+    if ($script:GuiControls.ButtonBrowseCsv) { $script:GuiControls.ButtonBrowseCsv.Add_Click({ Invoke-GuiAction { Show-CsvBrowser } }) }
+    if ($script:GuiControls.ButtonLoadCsv) { $script:GuiControls.ButtonLoadCsv.Add_Click({ Invoke-GuiAction { Import-CsvData } }) }
+    if ($script:GuiControls.ButtonCreateADUsers) { $script:GuiControls.ButtonCreateADUsers.Add_Click({ Invoke-GuiAction { New-ADUserFromCsv } }) }
+    if ($script:GuiControls.ButtonFillAttributes) { $script:GuiControls.ButtonFillAttributes.Add_Click({ Invoke-GuiAction { Set-ADUserAttributeFromCsv } }) }
+    if ($script:GuiControls.ButtonDisableUsers) { $script:GuiControls.ButtonDisableUsers.Add_Click({ Invoke-GuiAction { Disable-CreatedADUser } }) }
+    if ($script:GuiControls.ButtonDeleteUsers) { $script:GuiControls.ButtonDeleteUsers.Add_Click({ Invoke-GuiAction { Remove-CreatedADUser } }) }
+    if ($script:GuiControls.ButtonExportCreatedUsers) { $script:GuiControls.ButtonExportCreatedUsers.Add_Click({ Invoke-GuiAction { Export-CreatedUser } }) }
+    if ($script:GuiControls.ButtonApplySecuritySettings) { $script:GuiControls.ButtonApplySecuritySettings.Add_Click({ Invoke-GuiAction { Set-CriticalSecuritySetting } }) }
+
     # Neue Event Handler für Benutzer-Erstellung & Verwaltung
-    #if ($Global:GuiControls.ButtonGeneratePasswords) { $Global:GuiControls.ButtonGeneratePasswords.Add_Click({ Invoke-GuiAction { Generate-BulkPasswords } }) }
-    if ($Global:GuiControls.ButtonGenerateRandomData) { $Global:GuiControls.ButtonGenerateRandomData.Add_Click({ Invoke-GuiAction { Generate-BulkRandomData } }) }
-    #if ($Global:GuiControls.ButtonCreateFromTemplate) { $Global:GuiControls.ButtonCreateFromTemplate.Add_Click({ Invoke-GuiAction { Create-UsersFromTemplate } }) }
-    #if ($Global:GuiControls.ButtonBrowseTemplateUser) { $Global:GuiControls.ButtonBrowseTemplateUser.Add_Click({ Invoke-GuiAction { Browse-TemplateUser } }) }
-    #if ($Global:GuiControls.ButtonSetTimeRestrictions) { $Global:GuiControls.ButtonSetTimeRestrictions.Add_Click({ Invoke-GuiAction { Set-UserTimeRestrictions } }) }
-    #if ($Global:GuiControls.ButtonBrowseAvatars) { $Global:GuiControls.ButtonBrowseAvatars.Add_Click({ Invoke-GuiAction { Browse-AvatarPath } }) }
-    #if ($Global:GuiControls.ButtonAssignAvatars) { $Global:GuiControls.ButtonAssignAvatars.Add_Click({ Invoke-GuiAction { Assign-UserAvatars } }) }
-    
+    if ($script:GuiControls.ButtonGenerateRandomData) { $script:GuiControls.ButtonGenerateRandomData.Add_Click({ Invoke-GuiAction { Set-RandomUserAttribute } }) }
+    if ($script:GuiControls.ButtonCreateFromTemplate) { $script:GuiControls.ButtonCreateFromTemplate.Add_Click({ Invoke-GuiAction { New-UserFromTemplate } }) }
+    if ($script:GuiControls.ButtonSetTimeRestrictions) { $script:GuiControls.ButtonSetTimeRestrictions.Add_Click({ Invoke-GuiAction { Set-UserLogonHour } }) }
+    if ($script:GuiControls.ButtonBrowseAvatars) { $script:GuiControls.ButtonBrowseAvatars.Add_Click({ Invoke-GuiAction { Select-AvatarPath } }) }
+    if ($script:GuiControls.ButtonAssignAvatars) { $script:GuiControls.ButtonAssignAvatars.Add_Click({ Invoke-GuiAction { Set-UserAvatar } }) }
+
     # Schnellzugriff Event Handler
-    if ($Global:GuiControls.ButtonQuickRandomUsers) { $Global:GuiControls.ButtonQuickRandomUsers.Add_Click({ Invoke-GuiAction { Quick-CreateRandomUsers } }) }
-    if ($Global:GuiControls.ButtonQuickCreateGroups) { $Global:GuiControls.ButtonQuickCreateGroups.Add_Click({ Invoke-GuiAction { Quick-CreateGroups } }) }
-    if ($Global:GuiControls.ButtonQuickTestData) { $Global:GuiControls.ButtonQuickTestData.Add_Click({ Invoke-GuiAction { Quick-CreateTestData } }) }
-    if ($Global:GuiControls.ButtonQuickCleanup) { $Global:GuiControls.ButtonQuickCleanup.Add_Click({ Invoke-GuiAction { Quick-CleanupAll } }) }
-    
+    if ($script:GuiControls.ButtonQuickRandomUsers) { $script:GuiControls.ButtonQuickRandomUsers.Add_Click({ Invoke-GuiAction { New-RandomUser } }) }
+    if ($script:GuiControls.ButtonQuickCreateGroups) { $script:GuiControls.ButtonQuickCreateGroups.Add_Click({ Invoke-GuiAction { New-StandardTestGroup } }) }
+    if ($script:GuiControls.ButtonQuickTestData) { $script:GuiControls.ButtonQuickTestData.Add_Click({ Invoke-GuiAction { New-QuickTestDataSet } }) }
+    if ($script:GuiControls.ButtonQuickCleanup) { $script:GuiControls.ButtonQuickCleanup.Add_Click({ Invoke-GuiAction { Clear-CreatedTestData } }) }
+
     # Löschfunktionen Event Handler
-    if ($Global:GuiControls.ButtonDeleteGroups) { $Global:GuiControls.ButtonDeleteGroups.Add_Click({ Invoke-GuiAction { Remove-CreatedGroups } }) }
-    if ($Global:GuiControls.ButtonDeleteComputers) { $Global:GuiControls.ButtonDeleteComputers.Add_Click({ Invoke-GuiAction { Remove-CreatedComputers } }) }
-    if ($Global:GuiControls.ButtonDeleteOUs) { $Global:GuiControls.ButtonDeleteOUs.Add_Click({ Invoke-GuiAction { Remove-CreatedOUs } }) }
-    if ($Global:GuiControls.ButtonDeleteServiceAccounts) { $Global:GuiControls.ButtonDeleteServiceAccounts.Add_Click({ Invoke-GuiAction { Remove-CreatedServiceAccounts } }) }
-    if ($Global:GuiControls.ButtonExportAll) { $Global:GuiControls.ButtonExportAll.Add_Click({ Invoke-GuiAction { Export-AllObjects } }) }
-    
+    if ($script:GuiControls.ButtonDeleteGroups) { $script:GuiControls.ButtonDeleteGroups.Add_Click({ Invoke-GuiAction { Remove-CreatedGroup } }) }
+    if ($script:GuiControls.ButtonDeleteComputers) { $script:GuiControls.ButtonDeleteComputers.Add_Click({ Invoke-GuiAction { Remove-CreatedComputer } }) }
+    if ($script:GuiControls.ButtonDeleteOUs) { $script:GuiControls.ButtonDeleteOUs.Add_Click({ Invoke-GuiAction { Remove-CreatedOU } }) }
+    if ($script:GuiControls.ButtonDeleteServiceAccounts) { $script:GuiControls.ButtonDeleteServiceAccounts.Add_Click({ Invoke-GuiAction { Remove-CreatedServiceAccount } }) }
+    if ($script:GuiControls.ButtonDeletePrinters) { $script:GuiControls.ButtonDeletePrinters.Add_Click({ Invoke-GuiAction { Remove-CreatedPrinter } }) }
+    if ($script:GuiControls.ButtonExportAll) { $script:GuiControls.ButtonExportAll.Add_Click({ Invoke-GuiAction { Export-CreatedObject } }) }
+
     # Test-Umgebung Event Handler
-    if ($Global:GuiControls.ButtonCreateTestEnvironment) { $Global:GuiControls.ButtonCreateTestEnvironment.Add_Click({ Invoke-GuiAction { Create-TestEnvironment } }) }
-    if ($Global:GuiControls.ButtonCreateRandomUsers) { $Global:GuiControls.ButtonCreateRandomUsers.Add_Click({ Invoke-GuiAction { Create-RandomUsers } }) }
-    
+    if ($script:GuiControls.ButtonCreateTestEnvironment) { $script:GuiControls.ButtonCreateTestEnvironment.Add_Click({ Invoke-GuiAction { New-TestEnvironment } }) }
+    if ($script:GuiControls.ButtonCreateRandomUsers) { $script:GuiControls.ButtonCreateRandomUsers.Add_Click({ Invoke-GuiAction { New-RandomUser } }) }
+
     # Event Handler für Gruppen & Organisationsstruktur
-    if ($Global:GuiControls.ButtonCreateAutoGroups) { $Global:GuiControls.ButtonCreateAutoGroups.Add_Click({ Invoke-GuiAction { Create-AutomaticGroups } }) }
-    if ($Global:GuiControls.ButtonCreateNestedGroups) { $Global:GuiControls.ButtonCreateNestedGroups.Add_Click({ Invoke-GuiAction { Create-NestedGroupStructure } }) }
-    #if ($Global:GuiControls.ButtonCreateDynamicGroups) { $Global:GuiControls.ButtonCreateDynamicGroups.Add_Click({ Invoke-GuiAction { Create-DynamicSecurityGroups } }) }
-    #if ($Global:GuiControls.ButtonCreateOUStructure) { $Global:GuiControls.ButtonCreateOUStructure.Add_Click({ Invoke-GuiAction { Create-OrganizationalUnitStructure } }) }
-    
+    if ($script:GuiControls.ButtonCreateAutoGroups) { $script:GuiControls.ButtonCreateAutoGroups.Add_Click({ Invoke-GuiAction { New-AutomaticGroup } }) }
+    if ($script:GuiControls.ButtonCreateNestedGroups) { $script:GuiControls.ButtonCreateNestedGroups.Add_Click({ Invoke-GuiAction { New-NestedGroupStructure } }) }
+    if ($script:GuiControls.ButtonCreateOUStructure) { $script:GuiControls.ButtonCreateOUStructure.Add_Click({ Invoke-GuiAction { New-OUStructure } }) }
+
     # Event Handler für Computer & Geräte
-    if ($Global:GuiControls.ButtonCreateComputers) { $Global:GuiControls.ButtonCreateComputers.Add_Click({ Invoke-GuiAction { Create-ComputerObjects } }) }
-    if ($Global:GuiControls.ButtonCreateServiceAccounts) { $Global:GuiControls.ButtonCreateServiceAccounts.Add_Click({ Invoke-GuiAction { Create-ServiceAccounts } }) }
-    #if ($Global:GuiControls.ButtonCreatePrinters) { $Global:GuiControls.ButtonCreatePrinters.Add_Click({ Invoke-GuiAction { Create-PrinterObjects } }) }
-    if ($Global:GuiControls.ButtonCreateBitLockerData) { $Global:GuiControls.ButtonCreateBitLockerData.Add_Click({ Invoke-GuiAction { Create-ComputerBitLockerData } }) }
-    if ($Global:GuiControls.ButtonCreateLAPSData) { $Global:GuiControls.ButtonCreateLAPSData.Add_Click({ Invoke-GuiAction { Create-LAPSData } }) }
-    
+    if ($script:GuiControls.ButtonCreateComputers) { $script:GuiControls.ButtonCreateComputers.Add_Click({ Invoke-GuiAction { New-TestComputer } }) }
+    if ($script:GuiControls.ButtonCreateServiceAccounts) { $script:GuiControls.ButtonCreateServiceAccounts.Add_Click({ Invoke-GuiAction { New-TestServiceAccount } }) }
+    if ($script:GuiControls.ButtonCreatePrinters) { $script:GuiControls.ButtonCreatePrinters.Add_Click({ Invoke-GuiAction { New-TestPrinter } }) }
+    if ($script:GuiControls.ButtonCreateBitLockerData) { $script:GuiControls.ButtonCreateBitLockerData.Add_Click({ Invoke-GuiAction { New-ComputerBitLockerData } }) }
+    if ($script:GuiControls.ButtonCreateLAPSData) { $script:GuiControls.ButtonCreateLAPSData.Add_Click({ Invoke-GuiAction { New-LAPSData } }) }
+
     # Event Handler für Test-Szenarien
-    if ($Global:GuiControls.ButtonCreateTestDataSet) { $Global:GuiControls.ButtonCreateTestDataSet.Add_Click({ Invoke-GuiAction { Create-TestDataSet } }) }
-    if ($Global:GuiControls.ButtonActivateChaosMode) { $Global:GuiControls.ButtonActivateChaosMode.Add_Click({ Invoke-GuiAction { Activate-ChaosMode } }) }
-    #if ($Global:GuiControls.ButtonStartPerformanceTest) { $Global:GuiControls.ButtonStartPerformanceTest.Add_Click({ Invoke-GuiAction { Start-PerformanceTest } }) }
-    
+    if ($script:GuiControls.ButtonCreateTestDataSet) { $script:GuiControls.ButtonCreateTestDataSet.Add_Click({ Invoke-GuiAction { New-TestDataSet } }) }
+    if ($script:GuiControls.ButtonActivateChaosMode) { $script:GuiControls.ButtonActivateChaosMode.Add_Click({ Invoke-GuiAction { New-ChaosTestData } }) }
+    if ($script:GuiControls.ButtonStartPerformanceTest) { $script:GuiControls.ButtonStartPerformanceTest.Add_Click({ Invoke-GuiAction { Start-PerformanceTest } }) }
+
     # Event Handler für Sicherheit & Compliance
-    if ($Global:GuiControls.ButtonApplyPasswordPolicies) { $Global:GuiControls.ButtonApplyPasswordPolicies.Add_Click({ Invoke-GuiAction { Apply-PasswordPolicies } }) }
-    if ($Global:GuiControls.ButtonCreateRBACRoles) { $Global:GuiControls.ButtonCreateRBACRoles.Add_Click({ Invoke-GuiAction { Create-RBACRoles } }) }
-    #if ($Global:GuiControls.ButtonCreateBitLockerKeys) { $Global:GuiControls.ButtonCreateBitLockerKeys.Add_Click({ Invoke-GuiAction { Create-BitLockerKeys } }) }
-    
+    if ($script:GuiControls.ButtonApplyPasswordPolicies) { $script:GuiControls.ButtonApplyPasswordPolicies.Add_Click({ Invoke-GuiAction { Set-PasswordPolicyTestData } }) }
+    if ($script:GuiControls.ButtonCreateRBACRoles) { $script:GuiControls.ButtonCreateRBACRoles.Add_Click({ Invoke-GuiAction { New-RBACRole } }) }
+
     # Event Handler für Erweiterte Features
-    #if ($Global:GuiControls.ButtonCreateDNSEntries) { $Global:GuiControls.ButtonCreateDNSEntries.Add_Click({ Invoke-GuiAction { Create-DNSEntries } }) }
-    #if ($Global:GuiControls.ButtonSimulateMigration) { $Global:GuiControls.ButtonSimulateMigration.Add_Click({ Invoke-GuiAction { Simulate-Migration } }) }
-    #if ($Global:GuiControls.ButtonCreateKerberosTests) { $Global:GuiControls.ButtonCreateKerberosTests.Add_Click({ Invoke-GuiAction { Create-KerberosTests } }) }
-    #if ($Global:GuiControls.ButtonDocumentFSMO) { $Global:GuiControls.ButtonDocumentFSMO.Add_Click({ Invoke-GuiAction { Document-FSMORoles } }) }
-    if ($Global:GuiControls.ButtonCreateAdvancedFeatures) { $Global:GuiControls.ButtonCreateAdvancedFeatures.Add_Click({ Invoke-GuiAction { Create-AdvancedFeatures } }) }
- 
-    Write-Log "Event Handler registriert." 
-} 
- 
-#endregion 
- 
-#region Initialisierung und Start 
- 
-function Initialize-Application { 
-    Write-Log "Initialisiere Anwendung..." 
-    try { 
-        # XAML korrekt laden 
-        $stringReader = New-Object System.IO.StringReader -ArgumentList $XAML 
-        $xmlTextReader = [System.Xml.XmlTextReader]::new($stringReader) 
-        $Global:Window = [Windows.Markup.XamlReader]::Load($xmlTextReader) 
- 
-        if (-not $Global:Window) { 
-            Throw "Kritischer Fehler: Das XAML-Fenster konnte nicht geladen werden." 
-        } 
-        Write-Log "XAML-Fenster erfolgreich geladen." 
- 
-        Get-GuiControls # Ruft die korrigierte Funktion auf, die $Global:Window verwendet 
-        Register-EventHandlers 
- 
+    if ($script:GuiControls.ButtonCreateAdvancedFeatures) { $script:GuiControls.ButtonCreateAdvancedFeatures.Add_Click({ Invoke-GuiAction { Invoke-AdvancedFeature } }) }
+
+    Write-AppLog "Event Handler registriert."
+}
+
+#endregion
+
+#region Initialisierung und Start
+
+function Initialize-Application {
+    Write-AppLog "Initialisiere Anwendung..."
+    try {
+        # XAML korrekt laden
+        $stringReader = New-Object System.IO.StringReader -ArgumentList $XAML
+        $xmlTextReader = [System.Xml.XmlTextReader]::new($stringReader)
+        $script:Window = [Windows.Markup.XamlReader]::Load($xmlTextReader)
+
+        if (-not $script:Window) {
+            Throw "Kritischer Fehler: Das XAML-Fenster konnte nicht geladen werden."
+        }
+        Write-AppLog "XAML-Fenster erfolgreich geladen."
+
+        Initialize-GuiControl
+        Register-EventHandler
+
         # Standard CSV laden, falls vorhanden, ansonsten Beispiel erstellen
-        $Global:GuiControls.TextBoxCsvPath.Text = $Global:AppConfig.DefaultCsvPath
-        if (Test-Path $Global:AppConfig.DefaultCsvPath -PathType Leaf) { 
-            Import-CsvData 
-        } else { 
-            Write-Log "Standard CSV-Datei nicht gefunden: $($Global:AppConfig.DefaultCsvPath)" -Level "WARN" 
-            Create-SampleCsv
-        } 
+        $script:GuiControls.TextBoxCsvPath.Text = $script:AppConfig.DefaultCsvPath
+        if (Test-Path $script:AppConfig.DefaultCsvPath -PathType Leaf) {
+            Import-CsvData
+        } else {
+            Write-AppLog "Standard CSV-Datei nicht gefunden: $($script:AppConfig.DefaultCsvPath)" -Level "WARN"
+            New-SampleCsv
+        }
 
         # AD-Verbindung testen (nicht blockierend)
         if (-not (Test-ADConnection)) {
-            Write-Log "AD-Verbindung fehlgeschlagen - Funktion eingeschränkt verfügbar." -Level "WARN"
+            Write-AppLog "AD-Verbindung fehlgeschlagen - Funktion eingeschränkt verfügbar." -Level "WARN"
         } else {
             # OU-Dropdown initialisieren wenn AD-Verbindung besteht
             Initialize-OUDropdown
         }
 
-        Write-Log "Anwendung erfolgreich initialisiert." -Level "SUCCESS" 
-    } catch { 
-        Write-Log "Fehler während der Anwendungsinitialisierung: $($_.Exception.ToString())" -Level "ERROR" 
-        # Den Fehler weiterwerfen, damit er vom äußeren try-catch in Start-Application behandelt wird 
-        throw $_ 
-    } 
+        Write-AppLog "Anwendung erfolgreich initialisiert." -Level "SUCCESS"
+    } catch {
+        Write-AppLog "Fehler während der Anwendungsinitialisierung: $($_.Exception.ToString())" -Level "ERROR"
+        # Den Fehler weiterwerfen, damit er vom äußeren try-catch in Show-MainWindow behandelt wird
+        throw $_
+    }
 }
 
-function Create-SampleCsv {
+function New-SampleCsv {
+    <#
+    .SYNOPSIS
+    Legt eine Beispiel-CSV am Standardpfad an, falls dort noch keine Datei existiert
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+    if (-not $PSCmdlet.ShouldProcess($script:AppConfig.DefaultCsvPath, "Beispiel-CSV erstellen")) { return }
     try {
         $sampleData = @(
             [PSCustomObject]@{
@@ -2917,29 +2973,29 @@ function Create-SampleCsv {
                 UserPrincipalName = "test.user2@example.com"
             }
         )
-        
-        $sampleData | Export-Csv -Path $Global:AppConfig.DefaultCsvPath -NoTypeInformation -Encoding UTF8
-        Write-Log "Beispiel-CSV erstellt: $($Global:AppConfig.DefaultCsvPath)" -Level "INFO"
+
+        $sampleData | Export-Csv -Path $script:AppConfig.DefaultCsvPath -NoTypeInformation -Encoding UTF8
+        Write-AppLog "Beispiel-CSV erstellt: $($script:AppConfig.DefaultCsvPath)" -Level "INFO"
         Import-CsvData
     } catch {
-        Write-Log "Fehler beim Erstellen der Beispiel-CSV: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Erstellen der Beispiel-CSV: $($_.Exception.Message)" -Level "ERROR"
     }
 }
 
 #region GUI Verbesserungen - OU Dropdown, Progress, UPN Generation
 
-function Get-ADOrganizationalUnits {
+function Get-ADOrganizationalUnitList {
     <#
     .SYNOPSIS
     Ruft alle verfügbaren Organizational Units aus Active Directory ab
     #>
     try {
-        Write-Log "Lade OUs aus Active Directory..."
+        Write-AppLog "Lade OUs aus Active Directory..."
         $ous = Get-ADOrganizationalUnit -Filter * | Sort-Object DistinguishedName
-        Write-Log "$(($ous | Measure-Object).Count) OUs gefunden" -Level "SUCCESS"
+        Write-AppLog "$(($ous | Measure-Object).Count) OUs gefunden" -Level "SUCCESS"
         return $ous
     } catch {
-        Write-Log "Fehler beim Laden der OUs: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Laden der OUs: $($_.Exception.Message)" -Level "ERROR"
         return @()
     }
 }
@@ -2950,32 +3006,32 @@ function Initialize-OUDropdown {
     Befüllt die OU-ComboBox mit verfügbaren OUs
     #>
     try {
-        $comboBox = $Global:GuiControls.ComboBoxTargetOU
+        $comboBox = $script:GuiControls.ComboBoxTargetOU
         $comboBox.Items.Clear()
-        
+
         # Standard-OU hinzufügen
         $comboBox.Items.Add("OU=DummyUsers,DC=example,DC=com")
-        
+
         # AD OUs laden
-        $ous = Get-ADOrganizationalUnits
+        $ous = Get-ADOrganizationalUnitList
         foreach ($ou in $ous) {
             if ($ou.DistinguishedName -notlike "*CN=*") {  # Nur echte OUs, keine Container
                 $comboBox.Items.Add($ou.DistinguishedName)
             }
         }
-        
+
         # Ersten Eintrag auswählen
         if ($comboBox.Items.Count -gt 0) {
             $comboBox.SelectedIndex = 0
         }
-        
-        Write-Log "OU-Dropdown initialisiert mit $(($comboBox.Items | Measure-Object).Count) Einträgen" -Level "SUCCESS"
+
+        Write-AppLog "OU-Dropdown initialisiert mit $(($comboBox.Items | Measure-Object).Count) Einträgen" -Level "SUCCESS"
     } catch {
-        Write-Log "Fehler beim Initialisieren des OU-Dropdowns: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Initialisieren des OU-Dropdowns: $($_.Exception.Message)" -Level "ERROR"
     }
 }
 
-function Generate-UPN {
+function Get-UserPrincipalName {
     <#
     .SYNOPSIS
     Generiert automatisch User Principal Names basierend auf SamAccountName
@@ -2984,45 +3040,31 @@ function Generate-UPN {
         [string]$SamAccountName,
         [string]$DefaultDomain = $null
     )
-    
+
     try {
         if (-not $DefaultDomain) {
             # Versuche die Standard-Domain aus AD zu ermitteln (zwischengespeichert)
             $domain = $null
-            try { $domain = Get-CachedADDomain } catch { Write-Log "Domäne konnte nicht ermittelt werden: $($_.Exception.Message)" -Level "DEBUG" }
+            try { $domain = Get-CachedADDomain } catch { Write-AppLog "Domäne konnte nicht ermittelt werden: $($_.Exception.Message)" -Level "DEBUG" }
             if ($domain) {
                 $DefaultDomain = $domain.DNSRoot
             } else {
                 $DefaultDomain = "example.com"
             }
         }
-        
+
         $upn = "$SamAccountName@$DefaultDomain"
-        Write-Log "UPN generiert: $upn" -Level "DEBUG"
+        Write-AppLog "UPN generiert: $upn" -Level "DEBUG"
         return $upn
     } catch {
-        Write-Log "Fehler bei UPN-Generierung für '$SamAccountName': $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei UPN-Generierung für '$SamAccountName': $($_.Exception.Message)" -Level "ERROR"
         return "$SamAccountName@example.com"
     }
 }
 
 # Hilfsfunktionen für Zufallsdaten
-function New-RandomPassword {
-    param(
-        [int]$Length = 12,
-        [bool]$IncludeNumbers = $true,
-        [bool]$IncludeSymbols = $true,
-        [bool]$ExcludeAmbiguous = $true
-    )
-    
-    return Generate-SecurePassword -Complexity "Mittel (12 Zeichen + Symbole)" `
-        -IncludeNumbers $IncludeNumbers `
-        -IncludeSymbols $IncludeSymbols `
-        -ExcludeAmbiguous $ExcludeAmbiguous
-}
-
 function Get-RandomFirstName {
-    $names = $Global:RandomDataLists.FirstNames
+    $names = $script:RandomDataLists.FirstNames
     if ($names -and $names.Count -gt 0) {
         return $names | Get-Random
     }
@@ -3030,7 +3072,7 @@ function Get-RandomFirstName {
 }
 
 function Get-RandomLastName {
-    $names = $Global:RandomDataLists.LastNames
+    $names = $script:RandomDataLists.LastNames
     if ($names -and $names.Count -gt 0) {
         return $names | Get-Random
     }
@@ -3038,7 +3080,7 @@ function Get-RandomLastName {
 }
 
 function Get-RandomStreetAddress {
-    $streets = $Global:RandomDataLists.Streets
+    $streets = $script:RandomDataLists.Streets
     if ($streets -and $streets.Count -gt 0) {
         $street = $streets | Get-Random
         $number = Get-Random -Minimum 1 -Maximum 200
@@ -3048,7 +3090,7 @@ function Get-RandomStreetAddress {
 }
 
 function Get-RandomCity {
-    $cities = $Global:RandomDataLists.Cities
+    $cities = $script:RandomDataLists.Cities
     if ($cities -and $cities.Count -gt 0) {
         return $cities | Get-Random
     }
@@ -3066,7 +3108,7 @@ function Get-RandomPhoneNumber {
 }
 
 function Get-RandomDepartment {
-    $departments = $Global:RandomDataLists.Departments
+    $departments = $script:RandomDataLists.Departments
     if ($departments -and $departments.Count -gt 0) {
         return $departments | Get-Random
     }
@@ -3074,551 +3116,552 @@ function Get-RandomDepartment {
 }
 
 function Get-RandomJobTitle {
-    $titles = $Global:RandomDataLists.JobTitles
+    $titles = $script:RandomDataLists.JobTitles
     if ($titles -and $titles.Count -gt 0) {
         return $titles | Get-Random
     }
     return "Specialist"  # Fallback
 }
 
-function Update-Statistics {
+function Show-CreatedObjectCount {
     <#
     .SYNOPSIS
-    Aktualisiert die Statistik-Anzeige
+    Aktualisiert die Statistik-Kacheln mit der Anzahl der in dieser Sitzung erstellten Objekte
     #>
     try {
-        # Benutzer zählen
-        $userCount = $Global:CreatedUsers.Count
-        $Global:GuiControls.TextBlockUserCount.Text = $userCount.ToString()
-        
-        # Gruppen zählen (wird später implementiert)
-        $groupCount = 0
-        if ($Global:CreatedGroups) {
-            $groupCount = $Global:CreatedGroups.Count
+        $counts = [ordered]@{
+            TextBlockUserCount     = $script:CreatedUsers.Count
+            TextBlockGroupCount    = $script:CreatedGroups.Count
+            TextBlockComputerCount = $script:CreatedComputers.Count
+            TextBlockOUCount       = $script:CreatedOUs.Count
+            TextBlockServiceCount  = $script:CreatedServiceAccounts.Count
+            TextBlockPrinterCount  = $script:CreatedPrinters.Count
         }
-        $Global:GuiControls.TextBlockGroupCount.Text = $groupCount.ToString()
-        
-        # Computer zählen (wird später implementiert)
-        $computerCount = 0
-        if ($Global:CreatedComputers) {
-            $computerCount = $Global:CreatedComputers.Count
+        $totalCount = 0
+        foreach ($entry in $counts.GetEnumerator()) {
+            $totalCount += $entry.Value
+            if ($script:GuiControls[$entry.Key]) { $script:GuiControls[$entry.Key].Text = $entry.Value.ToString() }
         }
-        $Global:GuiControls.TextBlockComputerCount.Text = $computerCount.ToString()
-        
-        # OUs zählen (wird später implementiert)
-        $ouCount = 0
-        if ($Global:CreatedOUs) {
-            $ouCount = $Global:CreatedOUs.Count
-        }
-        $Global:GuiControls.TextBlockOUCount.Text = $ouCount.ToString()
-        
-        # Service Accounts zählen (wird später implementiert)
-        $serviceCount = 0
-        if ($Global:CreatedServiceAccounts) {
-            $serviceCount = $Global:CreatedServiceAccounts.Count
-        }
-        $Global:GuiControls.TextBlockServiceCount.Text = $serviceCount.ToString()
-        
-        # Gesamt
-        $totalCount = $userCount + $groupCount + $computerCount + $ouCount + $serviceCount
-        $Global:GuiControls.TextBlockTotalCount.Text = $totalCount.ToString()
-        
-        Write-Log "Statistiken aktualisiert" -Level "DEBUG"
+        if ($script:GuiControls.TextBlockTotalCount) { $script:GuiControls.TextBlockTotalCount.Text = $totalCount.ToString() }
+
+        Write-AppLog "Statistiken aktualisiert" -Level "DEBUG"
     } catch {
-        Write-Log "Fehler beim Aktualisieren der Statistiken: $($_.Exception.Message)" -Level "WARN"
+        Write-AppLog "Fehler beim Aktualisieren der Statistiken: $($_.Exception.Message)" -Level "WARN"
     }
 }
 
-function Generate-DummyAvatars {
+function ConvertTo-AvatarImage {
     <#
     .SYNOPSIS
-    Generiert Dummy-Avatar-Bilder für Benutzer
+    Erzeugt ein JPEG-Avatarbild (96x96 Pixel) mit Initialen und liefert es als Byte-Array
     #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Initials,
+        [int]$ColorIndex = 0
+    )
+
+    $palette = @(
+        @(52, 152, 219),   # Blau
+        @(46, 204, 113),   # Grün
+        @(231, 76, 60),    # Rot
+        @(155, 89, 182),   # Lila
+        @(241, 196, 15),   # Gelb
+        @(230, 126, 34),   # Orange
+        @(149, 165, 166),  # Grau
+        @(52, 73, 94)      # Dunkelblau
+    )
+    $rgb = $palette[[math]::Abs($ColorIndex) % $palette.Count]
+
+    $bitmap = $null; $graphics = $null; $font = $null; $brush = $null; $format = $null; $stream = $null
     try {
-        Add-Type -AssemblyName System.Drawing
-        
-        $avatarDir = (Get-ExportFilePath -FileName "DummyAvatars_$(Get-Date -Format 'yyyyMMdd_HHmmss')")
-        New-Item -Path $avatarDir -ItemType Directory -Force | Out-Null
-        
-        Show-Progress -Text "Generiere Dummy-Avatare..." -Value 0
-        
-        $colors = @(
-            [System.Drawing.Color]::FromArgb(52, 152, 219),   # Blau
-            [System.Drawing.Color]::FromArgb(46, 204, 113),   # Grün
-            [System.Drawing.Color]::FromArgb(231, 76, 60),    # Rot
-            [System.Drawing.Color]::FromArgb(155, 89, 182),   # Lila
-            [System.Drawing.Color]::FromArgb(241, 196, 15),   # Gelb
-            [System.Drawing.Color]::FromArgb(230, 126, 34),   # Orange
-            [System.Drawing.Color]::FromArgb(149, 165, 166),  # Grau
-            [System.Drawing.Color]::FromArgb(52, 73, 94)      # Dunkelblau
-        )
-        
-        $successCount = 0
-        $errorCount = 0
-        
-        for ($i = 0; $i -lt $Global:CreatedUsers.Count; $i++) {
-            $user = $Global:CreatedUsers[$i]
-            Update-Progress -Current ($i + 1) -Total $Global:CreatedUsers.Count -Text "Generiere Avatar für $user"
-            
-            try {
-                # Initialen ermitteln
-                $userObj = Get-ADUser -Identity $user -Properties GivenName, Surname -ErrorAction Stop
-                $initials = ""
-                
-                if ($userObj.GivenName) { $initials += $userObj.GivenName.Substring(0,1).ToUpper() }
-                if ($userObj.Surname) { $initials += $userObj.Surname.Substring(0,1).ToUpper() }
-                if ($initials -eq "") { $initials = $user.Substring(0,2).ToUpper() }
-                
-                # Bitmap erstellen
-                $bitmap = New-Object System.Drawing.Bitmap 200, 200
-                $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-                $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-                
-                # Hintergrundfarbe
-                $bgColor = $colors[$i % $colors.Count]
-                $graphics.Clear($bgColor)
-                
-                # Text (Initialen)
-                $font = New-Object System.Drawing.Font("Arial", 72, [System.Drawing.FontStyle]::Bold)
-                $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-                $stringFormat = New-Object System.Drawing.StringFormat
-                $stringFormat.Alignment = [System.Drawing.StringAlignment]::Center
-                $stringFormat.LineAlignment = [System.Drawing.StringAlignment]::Center
-                
-                $rect = New-Object System.Drawing.RectangleF(0, 0, 200, 200)
-                $graphics.DrawString($initials, $font, $brush, $rect, $stringFormat)
-                
-                # Speichern
-                $avatarFile = Join-Path $avatarDir "$user.jpg"
-                $bitmap.Save($avatarFile, [System.Drawing.Imaging.ImageFormat]::Jpeg)
-                
-                # AD Thumbnail aktualisieren
-                $photo = [System.IO.File]::ReadAllBytes($avatarFile)
-                Set-ADUser -Identity $user -Replace @{thumbnailPhoto=$photo} -ErrorAction Stop
-                
-                $successCount++
-                Write-Log "Avatar für '$user' generiert und zugewiesen" -Level "DEBUG"
-                
-                # Aufräumen
-                $graphics.Dispose()
-                $bitmap.Dispose()
-                $font.Dispose()
-                $brush.Dispose()
-                
-            } catch {
-                $errorCount++
-                Write-Log "Fehler beim Generieren des Avatars für '$user': $($_.Exception.Message)" -Level "WARN"
-            }
+        $bitmap = New-Object System.Drawing.Bitmap 96, 96
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+        $graphics.Clear([System.Drawing.Color]::FromArgb($rgb[0], $rgb[1], $rgb[2]))
+
+        $font = New-Object System.Drawing.Font('Segoe UI', 36, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+        $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+        $format = New-Object System.Drawing.StringFormat
+        $format.Alignment = [System.Drawing.StringAlignment]::Center
+        $format.LineAlignment = [System.Drawing.StringAlignment]::Center
+        $graphics.DrawString($Initials, $font, $brush, (New-Object System.Drawing.RectangleF(0, 0, 96, 96)), $format)
+
+        $stream = New-Object System.IO.MemoryStream
+        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+        # Komma verhindert, dass PowerShell das Byte-Array in Einzelwerte auflöst
+        return , $stream.ToArray()
+    } finally {
+        foreach ($disposable in @($stream, $format, $brush, $font, $graphics, $bitmap)) {
+            if ($disposable) { $disposable.Dispose() }
         }
-        
-        Hide-Progress
-        
-        $message = "Dummy-Avatare wurden generiert.`nErfolgreich: $successCount`nFehler: $errorCount`nGespeichert unter: $avatarDir"
-        [System.Windows.MessageBox]::Show($message, "Avatare generiert", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei Dummy-Avatar-Generierung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Avatar-Generierung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Generate-BulkPasswords {
-    try {
-        Write-Log "Starte Bulk-Passwort-Generierung..." -Level "INFO"
-        
-        $complexity = $Global:GuiControls.ComboBoxPasswordComplexity.SelectedItem
-        $includeNumbers = $Global:GuiControls.CheckBoxIncludeNumbers.IsChecked
-        $includeSymbols = $Global:GuiControls.CheckBoxIncludeSymbols.IsChecked 
-        $excludeAmbiguous = $Global:GuiControls.CheckBoxExcludeAmbiguous.IsChecked
+function Set-RandomUserAttribute {
+    <#
+    .SYNOPSIS
+    Überschreibt die ausgewählten Attribute aller vom Tool erstellten Benutzer mit neuen Zufallswerten
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
 
-        if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-            Write-Log "Keine Benutzer für Passwort-Reset vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning")
-            return
-        }
+    Write-AppLog "Starte Zuweisung von Zufallsattributen..." -Level "INFO"
 
-        $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie für $($Global:CreatedUsers.Count) Benutzer neue Passwörter generieren?",
-            "Passwörter zurücksetzen",
-            "YesNo",
-            "Question"
-        )
+    $randomNames = [bool]$script:GuiControls.CheckBoxRandomNames.IsChecked
+    $randomAddresses = [bool]$script:GuiControls.CheckBoxRandomAddresses.IsChecked
+    $randomPhone = [bool]$script:GuiControls.CheckBoxRandomPhone.IsChecked
+    $randomDepartments = [bool]$script:GuiControls.CheckBoxRandomDepartments.IsChecked
+    $randomTitles = [bool]$script:GuiControls.CheckBoxRandomTitles.IsChecked
+    $randomCompany = [bool]$script:GuiControls.CheckBoxRandomCompany.IsChecked
 
-        if ($result -ne "Yes") { return }
-
-        Show-Progress -Text "Generiere neue Passwörter..."
-        $processed = 0
-        $failed = 0
-
-        foreach ($user in $Global:CreatedUsers) {
-            try {
-                # Komplexität aus ComboBox ermitteln
-                $complexityText = if ($complexity) { $complexity.Content } else { "Mittel (12 Zeichen + Symbole)" }
-                
-                $newPassword = Generate-SecurePassword -Complexity $complexityText `
-                    -IncludeNumbers $includeNumbers `
-                    -IncludeSymbols $includeSymbols `
-                    -ExcludeAmbiguous $excludeAmbiguous
-                
-                Set-ADAccountPassword -Identity $user -NewPassword (ConvertTo-SecurePasswordString -PlainText $newPassword) -ErrorAction Stop
-                Write-Log "Passwort für ${user} erfolgreich zurückgesetzt" -Level "SUCCESS"
-                $processed++
-            }
-            catch {
-                Write-Log "Fehler beim Passwort-Reset für ${user}: $($_.Exception.Message)" -Level "ERROR"
-                $failed++
-            }
-            
-            Update-Progress -Current $processed -Total $Global:CreatedUsers.Count
-        }
-
-        Hide-Progress
-        [System.Windows.MessageBox]::Show("Passwort-Reset abgeschlossen.`n$processed Benutzer aktualisiert, $failed Fehler.", "Vorgang abgeschlossen", "OK", "Information")
-
+    if (-not ($randomNames -or $randomAddresses -or $randomPhone -or $randomDepartments -or $randomTitles -or $randomCompany)) {
+        Write-AppLog "Keine Attribute für Zufallsdaten ausgewählt" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte wählen Sie unter 'Zufällige Attribute' mindestens ein Attribut aus.", "Hinweis", "OK", "Warning") | Out-Null
+        return
     }
-    catch {
-        Write-Log "Fehler bei Bulk-Passwort-Generierung: $($_.Exception.Message)" -Level "ERROR"
-        Hide-Progress
+
+    $users = @($script:CreatedUsers)
+    if ($users.Count -eq 0) {
+        Write-AppLog "Keine Benutzer für Zufallsdaten vorhanden" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Es wurden in dieser Sitzung noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning") | Out-Null
+        return
     }
-}
 
-function Generate-BulkRandomData {
-    try {
-        Write-Log "Starte Generierung von Zufallsdaten..." -Level "INFO"
+    $result = [System.Windows.MessageBox]::Show(
+        "Sollen die ausgewählten Attribute von $($users.Count) vom Tool erstellten Benutzern mit Zufallswerten überschrieben werden?",
+        "Zufallsattribute zuweisen",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess("$($users.Count) Benutzer", "Zufallsattribute setzen")) { return }
 
-        $randomNames = $Global:GuiControls.CheckBoxRandomNames.IsChecked
-        $randomAddresses = $Global:GuiControls.CheckBoxRandomAddresses.IsChecked
-        $randomPhone = $Global:GuiControls.CheckBoxRandomPhone.IsChecked
-        $randomDepartments = $Global:GuiControls.CheckBoxRandomDepartments.IsChecked
+    $companyName = ([string]$script:GuiControls.TextBoxCompanyName.Text).Trim()
+    if (-not $companyName) { $companyName = "Testfirma" }
 
-        if (-not ($randomNames -or $randomAddresses -or $randomPhone -or $randomDepartments)) {
-            Write-Log "Keine Attribute für Zufallsdaten ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens ein Attribut für Zufallsdaten aus.", "Hinweis", "OK", "Warning")
-            return
-        }
+    Show-Progress -Text "Weise Zufallsattribute zu..."
+    $processed = 0
+    $failed = 0
 
-        if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-            Write-Log "Keine Benutzer für Zufallsdaten vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning")
-            return
-        }
-
-        Show-Progress -Text "Generiere Zufallsdaten..."
-        $processed = 0
-        $failed = 0
-
-        foreach ($user in $Global:CreatedUsers) {
-            try {
-                $params = @{}
-                
-                if ($randomNames) {
-                    $params.GivenName = Get-RandomFirstName
-                    $params.Surname = Get-RandomLastName
-                    $params.DisplayName = "$($params.GivenName) $($params.Surname)"
-                }
-                
-                if ($randomAddresses) {
-                    $params.StreetAddress = Get-RandomStreetAddress
-                    $params.City = Get-RandomCity
-                    $params.PostalCode = Get-RandomPostalCode
-                }
-                
-                if ($randomPhone) {
-                    $params.OfficePhone = Get-RandomPhoneNumber
-                    $params.MobilePhone = Get-RandomPhoneNumber
-                }
-                
-                if ($randomDepartments) {
-                    $params.Department = Get-RandomDepartment
-                    $params.Title = Get-RandomJobTitle
-                }
-
-                Set-ADUser -Identity $user @params -ErrorAction Stop
-                Write-Log "Zufallsdaten für ${user} erfolgreich gesetzt" -Level "SUCCESS"
-                $processed++
-            }
-            catch {
-                Write-Log "Fehler beim Setzen von Zufallsdaten für ${user}: $($_.Exception.Message)" -Level "ERROR"
-                $failed++
-            }
-            
-            Update-Progress -Current $processed -Total $Global:CreatedUsers.Count
-        }
-
-        Hide-Progress
-        [System.Windows.MessageBox]::Show("Zufallsdaten-Generierung abgeschlossen.`n$processed Benutzer aktualisiert, $failed Fehler.", "Vorgang abgeschlossen", "OK", "Information")
-
-    }
-    catch {
-        Write-Log "Fehler bei Zufallsdaten-Generierung: $($_.Exception.Message)" -Level "ERROR"
-        Hide-Progress
-    }
-}
-
-function Create-UsersFromTemplate {
-    try {
-        Write-Log "Starte Benutzer-Erstellung aus Vorlage..." -Level "INFO"
-        
-        $templateUser = $Global:GuiControls.TextBoxTemplateUser.Text
-        if ([string]::IsNullOrWhiteSpace($templateUser)) {
-            Write-Log "Kein Vorlagen-Benutzer angegeben" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie einen Vorlagen-Benutzer aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-
+    for ($i = 0; $i -lt $users.Count; $i++) {
+        $user = $users[$i]
+        Write-GuiProgress -Current ($i + 1) -Total $users.Count -Text "Aktualisiere $user"
         try {
-            $template = Get-ADUser -Identity $templateUser -Properties * -ErrorAction Stop
-        }
-        catch {
-            Write-Log "Vorlagen-Benutzer nicht gefunden: $templateUser" -Level "ERROR"
-            [System.Windows.MessageBox]::Show("Der angegebene Vorlagen-Benutzer wurde nicht gefunden.", "Fehler", "OK", "Error")
-            return
-        }
-
-        $numUsers = ConvertTo-IntOrZero -Value $Global:GuiControls.TextBoxNumUsersToCreate.Text
-        if ($numUsers -lt 1) {
-            Write-Log "Ungültige Anzahl Benutzer angegeben: $numUsers" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Benutzern an.", "Hinweis", "OK", "Warning")
-            return
-        }
-
-        Show-Progress -Text "Erstelle Benutzer aus Vorlage..."
-        $processed = 0
-        $failed = 0
-
-        for ($i = 1; $i -le $numUsers; $i++) {
-            try {
-                $newUser = @{
-                    Name = "Copy_$($template.Name)_$i"
-                    SamAccountName = "copy$($template.SamAccountName)$i"
-                    UserPrincipalName = "copy$($template.SamAccountName)$i@$($template.UserPrincipalName.Split('@')[1])"
-                    Path = $template.DistinguishedName.Substring($template.DistinguishedName.IndexOf(',') + 1)
-                    Instance = $template
-                }
-
-                New-ADUser @newUser -ErrorAction Stop
-                $Global:CreatedUsers.Add($newUser.SamAccountName)
-                Write-Log "Benutzer $($newUser.SamAccountName) aus Vorlage erstellt" -Level "SUCCESS"
-                $processed++
+            $params = @{}
+            if ($randomNames) {
+                $params.GivenName = Get-RandomFirstName
+                $params.Surname = Get-RandomLastName
+                $params.DisplayName = "$($params.GivenName) $($params.Surname)"
             }
-            catch {
-                Write-Log "Fehler beim Erstellen von Benutzer aus Vorlage: $($_.Exception.Message)" -Level "ERROR"
-                $failed++
+            if ($randomAddresses) {
+                $params.StreetAddress = Get-RandomStreetAddress
+                $params.City = Get-RandomCity
+                $params.PostalCode = Get-RandomPostalCode
+                $params.Country = "DE"
             }
-            
-            Update-Progress -Current $processed -Total $numUsers
+            if ($randomPhone) {
+                $params.OfficePhone = Get-RandomPhoneNumber
+                $params.MobilePhone = Get-RandomPhoneNumber
+            }
+            if ($randomDepartments) { $params.Department = Get-RandomDepartment }
+            if ($randomTitles) { $params.Title = Get-RandomJobTitle }
+            if ($randomCompany) { $params.Company = $companyName }
+
+            Set-ADUser -Identity $user @params -ErrorAction Stop
+            Write-AppLog "Zufallsattribute für '$user' gesetzt" -Level "DEBUG"
+            $processed++
+        } catch {
+            Write-AppLog "Fehler beim Setzen von Zufallsattributen für '$user': $($_.Exception.Message)" -Level "ERROR"
+            $failed++
         }
-
-        Hide-Progress
-        Update-Statistics
-        [System.Windows.MessageBox]::Show("Benutzer-Erstellung aus Vorlage abgeschlossen.`n$processed Benutzer erstellt, $failed Fehler.", "Vorgang abgeschlossen", "OK", "Information")
-
     }
-    catch {
-        Write-Log "Fehler bei Benutzer-Erstellung aus Vorlage: $($_.Exception.Message)" -Level "ERROR"
-        Hide-Progress
-    }
+
+    Hide-Progress
+    Write-AppLog "Zufallsattribute zugewiesen: $processed erfolgreich, $failed Fehler" -Level "INFO"
+    [System.Windows.MessageBox]::Show("Zufallsattribute zugewiesen.`n`nAktualisiert: $processed`nFehler: $failed", "Vorgang abgeschlossen", "OK", "Information") | Out-Null
 }
 
-function Browse-TemplateUser {
-    try {
-        $templateUser = Get-ADUser -Filter * -Properties DisplayName | 
-            Out-GridView -Title "Vorlagen-Benutzer auswählen" -OutputMode Single
-        
-        if ($templateUser) {
-            $Global:GuiControls.TextBoxTemplateUser.Text = $templateUser.SamAccountName
-            Write-Log "Vorlagen-Benutzer ausgewählt: $($templateUser.SamAccountName)" -Level "INFO"
-        }
-    }
-    catch {
-        Write-Log "Fehler bei Vorlagen-Benutzer-Auswahl: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler beim Laden der Benutzer-Liste.", "Fehler", "OK", "Error")
-    }
-}
-
-function Set-UserTimeRestrictions {
-    try {
-        Write-Log "Starte Setzen von Zeitbeschränkungen..." -Level "INFO"
-
-        if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-            Write-Log "Keine Benutzer für Zeitbeschränkungen vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning")
-            return
-        }
-
-        $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie für $($Global:CreatedUsers.Count) Benutzer Zeitbeschränkungen setzen?`n`nStandard: Mo-Fr 8-17 Uhr",
-            "Zeitbeschränkungen setzen",
-            "YesNo",
-            "Question"
-        )
-
-        if ($result -ne "Yes") { return }
-
-        Show-Progress -Text "Setze Zeitbeschränkungen..."
-        $processed = 0
-        $failed = 0
-
-        # Standard-Zeitbeschränkung: Mo-Fr 8-17 Uhr
-        # AD benötigt 168 Bytes (7 Tage * 24 Stunden)
-        $timeArray = New-Object byte[] 168
-        
-        # Alle Stunden auf 0 setzen (kein Zugriff)
-        for ($i = 0; $i -lt 168; $i++) {
-            $timeArray[$i] = 0
-        }
-        
-        # Mo-Fr (Tag 1-5) von 8-17 Uhr erlauben
-        for ($day = 1; $day -le 5; $day++) {  # Mo=1 bis Fr=5
-            for ($hour = 8; $hour -lt 17; $hour++) {  # 8-17 Uhr
-                $index = (($day - 1) * 24) + $hour
-                $timeArray[$index] = 1
-            }
-        }
-
-        foreach ($user in $Global:CreatedUsers) {
-            try {
-                Set-ADUser -Identity $user -Replace @{logonHours = $timeArray} -ErrorAction Stop
-                Write-Log "Zeitbeschränkungen für ${user} erfolgreich gesetzt" -Level "SUCCESS"
-                $processed++
-            }
-            catch {
-                Write-Log "Fehler beim Setzen von Zeitbeschränkungen für ${user}: $($_.Exception.Message)" -Level "ERROR"
-                $failed++
-            }
-            
-            Update-Progress -Current $processed -Total $Global:CreatedUsers.Count
-        }
-
-        Hide-Progress
-        [System.Windows.MessageBox]::Show("Zeitbeschränkungen gesetzt.`n$processed Benutzer aktualisiert, $failed Fehler.", "Vorgang abgeschlossen", "OK", "Information")
-
-    }
-    catch {
-        Write-Log "Fehler beim Setzen von Zeitbeschränkungen: $($_.Exception.Message)" -Level "ERROR"
-        Hide-Progress
-    }
-}
-
-function Browse-AvatarPath {
-    try {
-        Add-Type -AssemblyName System.Windows.Forms
-        $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
-        $folderBrowser.Description = "Avatar-Verzeichnis auswählen"
-        
-        if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $Global:GuiControls.TextBoxAvatarPath.Text = $folderBrowser.SelectedPath
-            Write-Log "Avatar-Pfad ausgewählt: $($folderBrowser.SelectedPath)" -Level "INFO"
-        }
-    }
-    catch {
-        Write-Log "Fehler bei Avatar-Pfad-Auswahl: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler beim Öffnen des Ordner-Browsers.", "Fehler", "OK", "Error")
-    }
-}
-
-function Assign-UserAvatars {
-    try {
-        Write-Log "Starte Avatar-Zuweisung..." -Level "INFO"
-
-        if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-            Write-Log "Keine Benutzer für Avatar-Zuweisung vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning")
-            return
-        }
-
-        $generateAvatars = $Global:GuiControls.CheckBoxGenerateAvatars.IsChecked
-        $avatarPath = $Global:GuiControls.TextBoxAvatarPath.Text
-
-        if ($generateAvatars) {
-            # Dummy-Avatare generieren
-            Write-Log "Generiere Dummy-Avatare..." -Level "INFO"
-            Generate-DummyAvatars
-            return
-        }
-        
-        if ([string]::IsNullOrWhiteSpace($avatarPath)) {
-            Write-Log "Kein Avatar-Pfad angegeben" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie einen Avatar-Pfad an oder aktivieren Sie 'Dummy-Avatare generieren'.", "Hinweis", "OK", "Warning")
-            return
-        }
-
-        if (-not (Test-Path $avatarPath -PathType Container)) {
-            Write-Log "Avatar-Verzeichnis nicht gefunden: $avatarPath" -Level "ERROR"
-            [System.Windows.MessageBox]::Show("Das angegebene Avatar-Verzeichnis wurde nicht gefunden.", "Fehler", "OK", "Error")
-            return
-        }
-
-        $avatars = Get-ChildItem -Path $avatarPath -Filter "*.jpg"
-        if ($avatars.Count -eq 0) {
-            Write-Log "Keine Avatar-Bilder im Verzeichnis gefunden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Keine JPG-Bilder im Avatar-Verzeichnis gefunden.", "Hinweis", "OK", "Warning")
-            return
-        }
-
-        Show-Progress -Text "Weise Avatare zu..."
-        $processed = 0
-        $failed = 0
-
-        foreach ($user in $Global:CreatedUsers) {
-            try {
-                # Zufälliges Avatar auswählen
-                $randomAvatar = $avatars | Get-Random
-                $photoBytes = [System.IO.File]::ReadAllBytes($randomAvatar.FullName)
-                
-                Set-ADUser -Identity $user -Replace @{thumbnailPhoto=$photoBytes} -ErrorAction Stop
-                Write-Log "Avatar für ${user} erfolgreich zugewiesen" -Level "SUCCESS"
-                $processed++
-            }
-            catch {
-                Write-Log "Fehler bei Avatar-Zuweisung für ${user}: $($_.Exception.Message)" -Level "ERROR"
-                $failed++
-            }
-            
-            Update-Progress -Current $processed -Total $Global:CreatedUsers.Count
-        }
-
-        Hide-Progress
-        [System.Windows.MessageBox]::Show("Avatar-Zuweisung abgeschlossen.`n$processed Benutzer aktualisiert, $failed Fehler.", "Vorgang abgeschlossen", "OK", "Information")
-
-    }
-    catch {
-        Write-Log "Fehler bei Avatar-Zuweisung: $($_.Exception.Message)" -Level "ERROR"
-        Hide-Progress
-    }
-}
-
-function Quick-CreateRandomUsers {
+function Get-UniqueSamAccountName {
     <#
     .SYNOPSIS
-    Schnelle Erstellung von Random-Benutzern
+    Erzeugt einen im AD und im aktuellen Lauf eindeutigen sAMAccountName (max. 20 Zeichen) aus Vor- und Nachname
     #>
+    param(
+        [Parameter(Mandatory = $true)][string]$GivenName,
+        [Parameter(Mandatory = $true)][string]$Surname,
+        [System.Collections.Generic.HashSet[string]]$UsedNames
+    )
+
+    $base = ConvertTo-NormalizedSamAccountName -SamAccountName "$GivenName.$Surname"
+    # 16 Zeichen Basis + 4 Ziffern = maximal 20 Zeichen (AD-Limit)
+    if ($base.Length -gt 16) { $base = $base.Substring(0, 16).TrimEnd('.', '_', '-') }
+
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        $candidate = "$base$(Get-Random -Minimum 1000 -Maximum 10000)"
+        if ($UsedNames -and $UsedNames.Contains($candidate)) { continue }
+        $existing = Get-ADUser -Filter "SamAccountName -eq '$(ConvertTo-ADFilterValue -Value $candidate)'" -ErrorAction SilentlyContinue
+        if (-not $existing) {
+            if ($UsedNames) { [void]$UsedNames.Add($candidate) }
+            return $candidate
+        }
+    }
+    throw "Für '$GivenName $Surname' konnte kein eindeutiger sAMAccountName ermittelt werden."
+}
+
+function Get-AvailableObjectName {
+    <#
+    .SYNOPSIS
+    Liefert einen im Container eindeutigen Objektnamen (CN); bei Konflikten wird der Suffix angehängt
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Suffix,
+        [System.Collections.Generic.HashSet[string]]$UsedNames
+    )
+
+    $inUse = $UsedNames -and $UsedNames.Contains($Name)
+    if (-not $inUse) {
+        $inUse = [bool](Get-ADObject -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $Name)'" -SearchBase $Path -SearchScope OneLevel -ErrorAction SilentlyContinue)
+    }
+    $result = if ($inUse) { "$Name ($Suffix)" } else { $Name }
+    if ($UsedNames) { [void]$UsedNames.Add($result) }
+    return $result
+}
+
+function New-UserFromTemplate {
+    <#
+    .SYNOPSIS
+    Erstellt Test-Benutzer mit zufälligen Namen auf Basis eines bestehenden Vorlagen-Benutzers
+
+    .DESCRIPTION
+    Übernimmt Abteilung, Firma, Titel, Büro, Adresse sowie die Gruppenmitgliedschaften der Vorlage.
+    Geschützte/privilegierte Gruppen (adminCount = 1, z. B. Domänen-Admins) werden nie übernommen.
+    Die Benutzer werden in der Test-OU (USERS) angelegt und für die Bereinigung nachverfolgt.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Starte Benutzer-Erstellung aus Vorlage..." -Level "INFO"
+
+    $templateName = ([string]$script:GuiControls.TextBoxTemplateUser.Text).Trim()
+    if (-not $templateName) {
+        Write-AppLog "Kein Vorlagen-Benutzer angegeben" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte geben Sie den Anmeldenamen (sAMAccountName) eines Vorlagen-Benutzers an.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+
+    $numUsers = ConvertTo-IntOrZero -Value $script:GuiControls.TextBoxTemplateCount.Text
+    if ($numUsers -lt 1 -or $numUsers -gt 500) {
+        Write-AppLog "Ungültige Anzahl für Vorlagen-Benutzer: '$($script:GuiControls.TextBoxTemplateCount.Text)'" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte geben Sie eine Anzahl zwischen 1 und 500 an.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+
+    if (-not (Test-ADConnection)) { return }
+    $targetOU = ([string]$script:GuiControls.ComboBoxTargetOU.Text).Trim()
+    if (-not (Test-TargetOU -TargetOU $targetOU)) { return }
+
+    $copyAttributes = @('Department', 'Company', 'Title', 'Office', 'StreetAddress', 'City', 'PostalCode', 'State', 'Country')
+    $template = Get-ADUser -Filter "SamAccountName -eq '$(ConvertTo-ADFilterValue -Value $templateName)'" -Properties ($copyAttributes + 'MemberOf') -ErrorAction Stop |
+        Select-Object -First 1
+    if (-not $template) {
+        Write-AppLog "Vorlagen-Benutzer nicht gefunden: $templateName" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Der Vorlagen-Benutzer '$templateName' wurde nicht gefunden.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+
+    # Nur unkritische Gruppen übernehmen (adminCount = 1 kennzeichnet AdminSDHolder-geschützte Gruppen)
+    $templateGroups = New-Object System.Collections.Generic.List[string]
+    $skippedGroups = 0
+    foreach ($groupDn in @($template.MemberOf)) {
+        try {
+            $group = Get-ADGroup -Identity $groupDn -Properties adminCount -ErrorAction Stop
+            if ($group.adminCount -eq 1) { $skippedGroups++; continue }
+            $templateGroups.Add($group.DistinguishedName)
+        } catch {
+            Write-AppLog "Gruppe '$groupDn' der Vorlage konnte nicht gelesen werden: $($_.Exception.Message)" -Level "DEBUG"
+        }
+    }
+
+    $result = [System.Windows.MessageBox]::Show(
+        "Sollen $numUsers Benutzer auf Basis von '$($template.SamAccountName)' erstellt werden?`n`n" +
+        "Übernommen werden: Abteilung, Firma, Titel, Büro, Adresse`n" +
+        "Gruppen: $($templateGroups.Count)$(if ($skippedGroups -gt 0) { " ($skippedGroups privilegierte Gruppe(n) werden ausgelassen)" })`n" +
+        "Ziel: Test-OU 'USERS' unterhalb von $targetOU",
+        "Benutzer aus Vorlage erstellen",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess($targetOU, "$numUsers Benutzer aus Vorlage '$($template.SamAccountName)' erstellen")) { return }
+
+    Show-Progress -Text "Erstelle Benutzer aus Vorlage..."
+    $testOUs = Initialize-TestOU -BaseOU $targetOU
+    $usersPath = if ($testOUs["USERS"]) { $testOUs["USERS"] } else { $targetOU }
+
+    $usedSamNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $usedObjectNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $processed = 0
+    $failed = 0
+
+    for ($i = 1; $i -le $numUsers; $i++) {
+        Write-GuiProgress -Current $i -Total $numUsers -Text "Erstelle Benutzer $i"
+        try {
+            $firstName = Get-RandomFirstName
+            $lastName = Get-RandomLastName
+            $samAccountName = Get-UniqueSamAccountName -GivenName $firstName -Surname $lastName -UsedNames $usedSamNames
+
+            $userParams = @{
+                Name = Get-AvailableObjectName -Name "$firstName $lastName" -Path $usersPath -Suffix $samAccountName -UsedNames $usedObjectNames
+                SamAccountName = $samAccountName
+                UserPrincipalName = Get-UserPrincipalName -SamAccountName $samAccountName
+                GivenName = $firstName
+                Surname = $lastName
+                DisplayName = "$firstName $lastName"
+                Description = "Erstellt aus Vorlage $($template.SamAccountName)"
+                Path = $usersPath
+                Enabled = $true
+                AccountPassword = (Get-InitialUserPassword)
+                ChangePasswordAtLogon = [bool]$script:AppConfig.EnablePasswordChange
+            }
+            foreach ($attribute in $copyAttributes) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$template.$attribute)) {
+                    $userParams[$attribute] = $template.$attribute
+                }
+            }
+
+            New-ADUser @userParams -ErrorAction Stop
+            $script:CreatedUsers.Add($samAccountName)
+
+            foreach ($groupDn in $templateGroups) {
+                try {
+                    Add-ADGroupMember -Identity $groupDn -Members $samAccountName -ErrorAction Stop
+                } catch {
+                    Write-AppLog "'$samAccountName' konnte nicht zu '$groupDn' hinzugefügt werden: $($_.Exception.Message)" -Level "WARN"
+                }
+            }
+
+            Write-AppLog "Benutzer '$samAccountName' aus Vorlage erstellt" -Level "SUCCESS"
+            $processed++
+        } catch {
+            Write-AppLog "Fehler beim Erstellen eines Benutzers aus Vorlage: $($_.Exception.Message)" -Level "ERROR"
+            $failed++
+        }
+    }
+
+    Hide-Progress
+    Show-CreatedObjectCount
+    Write-AppLog "Benutzer aus Vorlage: $processed erstellt, $failed Fehler" -Level "INFO"
+    [System.Windows.MessageBox]::Show("Benutzer-Erstellung aus Vorlage abgeschlossen.`n`nErstellt: $processed`nFehler: $failed`nZiel-OU: $usersPath", "Vorgang abgeschlossen", "OK", "Information") | Out-Null
+}
+
+function ConvertTo-LogonHoursBitmask {
+    <#
+    .SYNOPSIS
+    Erzeugt die 21-Byte-Bitmaske für das AD-Attribut logonHours
+
+    .DESCRIPTION
+    logonHours enthält 168 Bits (7 Tage x 24 Stunden). Bit 0 von Byte 0 entspricht Sonntag 00:00-01:00 UTC;
+    innerhalb eines Bytes ist das niederwertigste Bit die früheste Stunde. Die erlaubten Zeiten werden in
+    lokaler Zeit angegeben und anhand des UTC-Offsets der Zeitzone umgerechnet.
+    #>
+    param(
+        [int[]]$Days = @(1, 2, 3, 4, 5),
+        [ValidateRange(0, 23)][int]$StartHour = 8,
+        [ValidateRange(1, 24)][int]$EndHour = 17,
+        [int]$UtcOffsetHours = [int][math]::Round([System.TimeZoneInfo]::Local.BaseUtcOffset.TotalHours)
+    )
+
+    $bytes = New-Object byte[] 21
+    foreach ($day in $Days) {
+        for ($hour = $StartHour; $hour -lt $EndHour; $hour++) {
+            # Lokale Wochenstunde (0 = Sonntag 00:00) in UTC umrechnen
+            $bit = ((($day * 24) + $hour - $UtcOffsetHours) % 168 + 168) % 168
+            $bytes[[math]::Floor($bit / 8)] = $bytes[[math]::Floor($bit / 8)] -bor [byte](1 -shl ($bit % 8))
+        }
+    }
+    return , $bytes
+}
+
+function Set-UserLogonHour {
+    <#
+    .SYNOPSIS
+    Beschränkt die Anmeldezeiten aller vom Tool erstellten Benutzer auf Mo-Fr 08:00-17:00 Uhr (lokale Zeit)
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Starte Setzen von Anmeldezeiten..." -Level "INFO"
+
+    $users = @($script:CreatedUsers)
+    if ($users.Count -eq 0) {
+        Write-AppLog "Keine Benutzer für Anmeldezeiten vorhanden" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Es wurden in dieser Sitzung noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+
+    $result = [System.Windows.MessageBox]::Show(
+        "Sollen die Anmeldezeiten von $($users.Count) Benutzern auf Mo-Fr 08:00-17:00 Uhr (lokale Zeit) beschränkt werden?",
+        "Anmeldezeiten setzen",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess("$($users.Count) Benutzer", "logonHours setzen")) { return }
+
+    [byte[]]$logonHours = ConvertTo-LogonHoursBitmask -Days @(1, 2, 3, 4, 5) -StartHour 8 -EndHour 17
+
+    Show-Progress -Text "Setze Anmeldezeiten..."
+    $processed = 0
+    $failed = 0
+
+    for ($i = 0; $i -lt $users.Count; $i++) {
+        $user = $users[$i]
+        Write-GuiProgress -Current ($i + 1) -Total $users.Count -Text "Anmeldezeiten für $user"
+        try {
+            Set-ADUser -Identity $user -Replace @{ logonHours = $logonHours } -ErrorAction Stop
+            Write-AppLog "Anmeldezeiten für '$user' gesetzt" -Level "DEBUG"
+            $processed++
+        } catch {
+            Write-AppLog "Fehler beim Setzen der Anmeldezeiten für '$user': $($_.Exception.Message)" -Level "ERROR"
+            $failed++
+        }
+    }
+
+    Hide-Progress
+    Write-AppLog "Anmeldezeiten gesetzt: $processed erfolgreich, $failed Fehler" -Level "INFO"
+    [System.Windows.MessageBox]::Show("Anmeldezeiten gesetzt (Mo-Fr 08:00-17:00 Uhr).`n`nAktualisiert: $processed`nFehler: $failed", "Vorgang abgeschlossen", "OK", "Information") | Out-Null
+}
+
+function Select-AvatarPath {
+    <#
+    .SYNOPSIS
+    Öffnet einen Ordnerauswahl-Dialog für Avatar-Bilder
+    #>
+    Add-Type -AssemblyName System.Windows.Forms
+    $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
     try {
-        Write-Log "Starte Quick Random User Erstellung..." -Level "INFO"
-        
-        # Nutze die Random User Creation Funktion
-        Create-RandomUsers
-        
-    } catch {
-        Write-Log "Fehler bei Quick Random User Erstellung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Schnellerstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
+        $folderBrowser.Description = "Ordner mit Avatar-Bildern (JPG, max. 100 KB) auswählen"
+        $currentPath = [string]$script:GuiControls.TextBoxAvatarPath.Text
+        if ($currentPath -and (Test-Path -LiteralPath $currentPath -PathType Container)) {
+            $folderBrowser.SelectedPath = $currentPath
+        }
+        if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $script:GuiControls.TextBoxAvatarPath.Text = $folderBrowser.SelectedPath
+            $script:GuiControls.CheckBoxGenerateAvatars.IsChecked = $false
+            Write-AppLog "Avatar-Ordner ausgewählt: $($folderBrowser.SelectedPath)" -Level "INFO"
+        }
+    } finally {
+        $folderBrowser.Dispose()
     }
 }
 
-function Create-TestEnvironment {
+function Set-UserAvatar {
+    <#
+    .SYNOPSIS
+    Setzt das Profilbild (thumbnailPhoto) aller vom Tool erstellten Benutzer
+
+    .DESCRIPTION
+    Entweder werden Initialen-Avatare generiert oder zufällig JPG-Bilder aus dem gewählten Ordner verwendet.
+    Bilder über 100 KB werden übersprungen (AD-Grenze für thumbnailPhoto).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Starte Avatar-Zuweisung..." -Level "INFO"
+
+    $users = @($script:CreatedUsers)
+    if ($users.Count -eq 0) {
+        Write-AppLog "Keine Benutzer für Avatar-Zuweisung vorhanden" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Es wurden in dieser Sitzung noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+
+    $generateAvatars = [bool]$script:GuiControls.CheckBoxGenerateAvatars.IsChecked
+    $images = @()
+    if (-not $generateAvatars) {
+        $avatarPath = ([string]$script:GuiControls.TextBoxAvatarPath.Text).Trim()
+        if (-not $avatarPath) {
+            Write-AppLog "Kein Avatar-Ordner angegeben" -Level "WARN"
+            [System.Windows.MessageBox]::Show("Bitte wählen Sie einen Ordner mit Bildern aus oder aktivieren Sie 'Avatare automatisch generieren'.", "Hinweis", "OK", "Warning") | Out-Null
+            return
+        }
+        if (-not (Test-Path -LiteralPath $avatarPath -PathType Container)) {
+            Write-AppLog "Avatar-Ordner nicht gefunden: $avatarPath" -Level "WARN"
+            [System.Windows.MessageBox]::Show("Der Avatar-Ordner wurde nicht gefunden:`n$avatarPath", "Hinweis", "OK", "Warning") | Out-Null
+            return
+        }
+        $images = @(Get-ChildItem -LiteralPath $avatarPath -File |
+            Where-Object { $_.Extension -in @('.jpg', '.jpeg') -and $_.Length -le 100KB })
+        if ($images.Count -eq 0) {
+            Write-AppLog "Keine geeigneten Avatar-Bilder in '$avatarPath' gefunden" -Level "WARN"
+            [System.Windows.MessageBox]::Show("Im Ordner wurden keine JPG-Bilder mit höchstens 100 KB gefunden.", "Hinweis", "OK", "Warning") | Out-Null
+            return
+        }
+    }
+
+    $source = if ($generateAvatars) { "generierte Initialen-Avatare" } else { "$($images.Count) Bild(er) aus dem Ordner" }
+    $result = [System.Windows.MessageBox]::Show(
+        "Soll für $($users.Count) Benutzer das Profilbild (thumbnailPhoto) gesetzt werden?`n`nQuelle: $source",
+        "Avatare zuweisen",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess("$($users.Count) Benutzer", "thumbnailPhoto setzen")) { return }
+
+    if ($generateAvatars) { Add-Type -AssemblyName System.Drawing }
+
+    Show-Progress -Text "Weise Avatare zu..."
+    $processed = 0
+    $failed = 0
+
+    for ($i = 0; $i -lt $users.Count; $i++) {
+        $user = $users[$i]
+        Write-GuiProgress -Current ($i + 1) -Total $users.Count -Text "Avatar für $user"
+        try {
+            if ($generateAvatars) {
+                $userObj = Get-ADUser -Identity $user -Properties GivenName, Surname -ErrorAction Stop
+                $initials = -join @(@($userObj.GivenName, $userObj.Surname) |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    ForEach-Object { $_.Trim().Substring(0, 1) })
+                if (-not $initials) { $initials = $user.Substring(0, [math]::Min(2, $user.Length)) }
+                [byte[]]$photo = ConvertTo-AvatarImage -Initials $initials.ToUpper() -ColorIndex $i
+            } else {
+                [byte[]]$photo = [System.IO.File]::ReadAllBytes(($images | Get-Random).FullName)
+            }
+
+            Set-ADUser -Identity $user -Replace @{ thumbnailPhoto = $photo } -ErrorAction Stop
+            Write-AppLog "Avatar für '$user' zugewiesen" -Level "DEBUG"
+            $processed++
+        } catch {
+            Write-AppLog "Fehler bei Avatar-Zuweisung für '$user': $($_.Exception.Message)" -Level "ERROR"
+            $failed++
+        }
+    }
+
+    Hide-Progress
+    Write-AppLog "Avatare zugewiesen: $processed erfolgreich, $failed Fehler" -Level "INFO"
+    [System.Windows.MessageBox]::Show("Avatar-Zuweisung abgeschlossen.`n`nAktualisiert: $processed`nFehler: $failed", "Vorgang abgeschlossen", "OK", "Information") | Out-Null
+}
+
+function New-TestEnvironment {
     <#
     .SYNOPSIS
     Erstellt die komplette Test-Umgebung mit allen benötigten OUs
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Test-Umgebung Erstellung..." -Level "INFO"
-        
-        $companyName = $Global:GuiControls.TextBoxCompanyName.Text
+        Write-AppLog "Starte Test-Umgebung Erstellung..." -Level "INFO"
+
+        $companyName = $script:GuiControls.TextBoxCompanyName.Text
         if ([string]::IsNullOrWhiteSpace($companyName)) {
             $companyName = "TestCompany"
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie die Test-Umgebung '$companyName' erstellen?`n`n" +
             "Folgende OUs werden erstellt:`n" +
@@ -3632,74 +3675,75 @@ function Create-TestEnvironment {
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+        if (-not $PSCmdlet.ShouldProcess("OU=$companyName (Domänenstamm)", "Test-Umgebung erstellen")) { return }
+
         Show-Progress -Text "Erstelle Test-Umgebung..."
-        
+
         # Basis-OU ermitteln
         $domain = Get-ADDomain
         $baseOU = $domain.DistinguishedName
-        
+
         # Haupt-OU erstellen
         $companyOU = "OU=$companyName,$baseOU"
-        
+
         try {
             # Prüfe ob Haupt-OU bereits existiert
             $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $companyOU)'" -ErrorAction SilentlyContinue
-            
+
             if (-not $existingOU) {
                 New-ADOrganizationalUnit -Name $companyName `
                     -Path $baseOU `
-                    -Description "Test Company OU" `
+                    -Description "Wurzel-OU der Test-Umgebung" `
                     -ProtectedFromAccidentalDeletion $false `
                     -ErrorAction Stop
-                
-                $Global:CreatedOUs.Add($companyOU)
-                Write-Log "Haupt-OU '$companyName' erstellt" -Level "SUCCESS"
+
+                $script:CreatedOUs.Add($companyOU)
+                Write-AppLog "Haupt-OU '$companyName' erstellt" -Level "SUCCESS"
             } else {
-                Write-Log "Haupt-OU '$companyName' existiert bereits" -Level "INFO"
+                Write-AppLog "Haupt-OU '$companyName' existiert bereits" -Level "INFO"
             }
-            
+
             # Erstelle Unter-OUs
             $subOUs = @{
-                "USERS" = "Test User Accounts"
-                "GROUPS" = "Test Security Groups"  
-                "COMPUTERS" = "Test Computer Accounts"
-                "SERVICES" = "Test Service Accounts"
-                "RESOURCES" = "Test Resources"
+                "USERS" = "Test-Benutzerkonten"
+                "GROUPS" = "Test-Sicherheitsgruppen"
+                "COMPUTERS" = "Test-Computerkonten"
+                "SERVICES" = "Test-Dienstkonten"
+                "RESOURCES" = "Test-Ressourcen"
             }
-            
+
             foreach ($ouName in $subOUs.Keys) {
                 $ouPath = "OU=$ouName,$companyOU"
-                
+
                 try {
                     $existingSubOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $ouPath)'" -ErrorAction SilentlyContinue
-                    
+
                     if (-not $existingSubOU) {
                         New-ADOrganizationalUnit -Name $ouName `
                             -Path $companyOU `
                             -Description $subOUs[$ouName] `
                             -ProtectedFromAccidentalDeletion $false `
                             -ErrorAction Stop
-                        
-                        $Global:CreatedOUs.Add($ouPath)
-                        Write-Log "Unter-OU '$ouName' erstellt" -Level "SUCCESS"
+
+                        $script:CreatedOUs.Add($ouPath)
+                        Write-AppLog "Unter-OU '$ouName' erstellt" -Level "SUCCESS"
                     }
                 } catch {
-                    Write-Log "Fehler beim Erstellen der OU '$ouName': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Erstellen der OU '$ouName': $($_.Exception.Message)" -Level "ERROR"
                 }
             }
-            
+
             # Aktualisiere OU-Dropdown
             Initialize-OUDropdown
-            
+
             # Setze die neue OU als Standard
-            $Global:GuiControls.ComboBoxTargetOU.Text = $companyOU
-            
+            $script:GuiControls.ComboBoxTargetOU.Text = $companyOU
+
             Hide-Progress
-            Update-Statistics
-            
+            Show-CreatedObjectCount
+
             [System.Windows.MessageBox]::Show(
                 "Test-Umgebung erfolgreich erstellt!`n`n" +
                 "Basis-OU: $companyOU`n" +
@@ -3708,190 +3752,179 @@ function Create-TestEnvironment {
                 "OK",
                 "Information"
             )
-            
+
         } catch {
-            Write-Log "Fehler beim Erstellen der Test-Umgebung: $($_.Exception.Message)" -Level "ERROR"
+            Write-AppLog "Fehler beim Erstellen der Test-Umgebung: $($_.Exception.Message)" -Level "ERROR"
             throw
         }
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei Test-Umgebung Erstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Test-Umgebung Erstellung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Create-RandomUsers {
+function New-RandomUser {
     <#
     .SYNOPSIS
     Erstellt zufällige Benutzer basierend auf den GUI-Einstellungen
     #>
-    try {
-        Write-Log "Starte Random User Erstellung..." -Level "INFO"
-        
-        # Parameter aus GUI lesen
-        $userCount = $Global:GuiControls.TextBoxRandomUserCount.Text
-        if ([string]::IsNullOrWhiteSpace($userCount)) {
-            $userCount = 50
-        } else {
-            $userCount = ConvertTo-IntOrZero -Value $userCount
-        }
-        
-        if ($userCount -le 0) {
-            Write-Log "Ungültige Anzahl Benutzer" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Benutzern an.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        # Ziel-OU bestimmen
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
-        if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
-            Write-Log "Keine gültige Ziel-OU ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte erstellen Sie zuerst eine Test-Umgebung oder wählen Sie eine gültige OU.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        # Prüfe ob USERS OU existiert
-        $userOU = $targetOU
-        if ($targetOU -match "OU=\w+,DC=") {
-            # Versuche USERS Unter-OU zu verwenden
-            $testUserOU = "OU=USERS,$targetOU"
-            try {
-                $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $testUserOU)'" -ErrorAction SilentlyContinue
-                if ($existingOU) {
-                    $userOU = $testUserOU
-                    Write-Log "Verwende USERS OU: $userOU" -Level "DEBUG"
-                }
-            } catch {
-                Write-Log "USERS OU nicht gefunden, verwende Basis-OU" -Level "DEBUG"
-            }
-        }
-        
-        # Optionen aus GUI
-        $randomNames = $Global:GuiControls.CheckBoxRandomNames.IsChecked
-        $randomAddresses = $Global:GuiControls.CheckBoxRandomAddresses.IsChecked
-        $randomPhone = $Global:GuiControls.CheckBoxRandomPhone.IsChecked
-        $randomDepartments = $Global:GuiControls.CheckBoxRandomDepartments.IsChecked
-        $randomTitles = $Global:GuiControls.CheckBoxRandomTitles.IsChecked
-        $randomCompany = $Global:GuiControls.CheckBoxRandomCompany.IsChecked
-        
-        $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie $userCount zufällige Benutzer erstellen?`n`n" +
-            "Ziel-OU: $userOU`n" +
-            "Zufällige Namen: $(if ($randomNames) { 'Ja' } else { 'Nein' })`n" +
-            "Zufällige Adressen: $(if ($randomAddresses) { 'Ja' } else { 'Nein' })`n" +
-            "Zufällige Telefonnummern: $(if ($randomPhone) { 'Ja' } else { 'Nein' })",
-            "Random Benutzer erstellen",
-            "YesNo",
-            "Question"
-        )
-        
-        if ($result -ne "Yes") { return }
-        
-        Show-Progress -Text "Erstelle zufällige Benutzer..."
-        $successCount = 0
-        $errorCount = 0
-        
-        for ($i = 1; $i -le $userCount; $i++) {
-            Update-Progress -Current $i -Total $userCount -Text "Erstelle Benutzer $i von $userCount..."
-            
-            try {
-                # Generiere Benutzerdaten
-                $firstName = Get-RandomFirstName
-                $lastName = Get-RandomLastName
-                $samAccountName = "$($firstName.ToLower()).$($lastName.ToLower())$(Get-Random -Minimum 100 -Maximum 999)"
-                
-                $userParams = @{
-                    Name = "$firstName $lastName"
-                    SamAccountName = $samAccountName
-                    UserPrincipalName = "$samAccountName@$((Get-CachedADDomain).DNSRoot)"
-                    GivenName = $firstName
-                    Surname = $lastName
-                    DisplayName = "$firstName $lastName"
-                    Path = $userOU
-                    Enabled = $true
-                    AccountPassword = (New-RandomSecurePassword)
-                    ChangePasswordAtLogon = $false
-                }
-                
-                # Zusätzliche Attribute
-                if ($randomAddresses) {
-                    $userParams.StreetAddress = Get-RandomStreetAddress
-                    $userParams.City = Get-RandomCity
-                    $userParams.PostalCode = Get-RandomPostalCode
-                    $userParams.State = "Germany"
-                    $userParams.Country = "DE"
-                }
-                
-                if ($randomPhone) {
-                    $userParams.OfficePhone = Get-RandomPhoneNumber
-                    $userParams.MobilePhone = Get-RandomPhoneNumber
-                }
-                
-                if ($randomDepartments) {
-                    $userParams.Department = Get-RandomDepartment
-                }
-                
-                if ($randomTitles) {
-                    $userParams.Title = Get-RandomJobTitle
-                }
-                
-                if ($randomCompany) {
-                    $companyName = $Global:GuiControls.TextBoxCompanyName.Text
-                    if ([string]::IsNullOrWhiteSpace($companyName)) {
-                        $companyName = "Test Company"
-                    }
-                    $userParams.Company = $companyName
-                }
-                
-                New-ADUser @userParams -ErrorAction Stop
-                $Global:CreatedUsers.Add($samAccountName)
-                $successCount++
-                
-            } catch {
-                Write-Log "Fehler beim Erstellen von Benutzer $($_.Exception.Message)" -Level "ERROR"
-                $errorCount++
-            }
-        }
-        
-        Hide-Progress
-        Update-Statistics
-        
-        $message = "Random-Benutzer erfolgreich erstellt:`n`nErstellt: $successCount`nFehler: $errorCount`nZiel-OU: $userOU"
-        
-        [System.Windows.MessageBox]::Show($message, "Random Benutzer erstellt", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei Random User Erstellung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Starte Erstellung von Zufallsbenutzern..." -Level "INFO"
+
+    $userCountText = [string]$script:GuiControls.TextBoxRandomUserCount.Text
+    $userCount = if ([string]::IsNullOrWhiteSpace($userCountText)) { 50 } else { ConvertTo-IntOrZero -Value $userCountText }
+    if ($userCount -le 0) {
+        Write-AppLog "Ungültige Anzahl Benutzer: '$userCountText'" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Benutzern an.", "Hinweis", "OK", "Warning") | Out-Null
+        return
     }
+
+    $targetOU = ([string]$script:GuiControls.ComboBoxTargetOU.Text).Trim()
+    if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
+        Write-AppLog "Keine gültige Ziel-OU ausgewählt" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte erstellen Sie zuerst eine Test-Umgebung oder wählen Sie eine gültige Ziel-OU.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+    if (-not (Test-TargetOU -TargetOU $targetOU)) { return }
+
+    # USERS-Unter-OU verwenden, falls vorhanden
+    $userOU = $targetOU
+    $testUserOU = "OU=USERS,$targetOU"
+    $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $testUserOU)'" -ErrorAction SilentlyContinue
+    if ($existingOU) {
+        $userOU = $testUserOU
+        Write-AppLog "Verwende USERS-OU: $userOU" -Level "DEBUG"
+    }
+
+    $randomAddresses = [bool]$script:GuiControls.CheckBoxRandomAddresses.IsChecked
+    $randomPhone = [bool]$script:GuiControls.CheckBoxRandomPhone.IsChecked
+    $randomDepartments = [bool]$script:GuiControls.CheckBoxRandomDepartments.IsChecked
+    $randomTitles = [bool]$script:GuiControls.CheckBoxRandomTitles.IsChecked
+    $randomCompany = [bool]$script:GuiControls.CheckBoxRandomCompany.IsChecked
+    $setExpiryDate = [bool]$script:GuiControls.CheckBoxSetExpiryDate.IsChecked
+    $temporaryAccount = [bool]$script:GuiControls.CheckBoxTemporaryAccount.IsChecked
+
+    # Passwort-Optionen (gelten nur, wenn kein Initialpasswort eingegeben wurde)
+    $passwordOptions = @{
+        Complexity = if ($script:GuiControls.ComboBoxPasswordComplexity.SelectedItem) { [string]$script:GuiControls.ComboBoxPasswordComplexity.SelectedItem.Content } else { "Mittel (12 Zeichen + Symbole)" }
+        IncludeNumbers = [bool]$script:GuiControls.CheckBoxIncludeNumbers.IsChecked
+        IncludeSymbols = [bool]$script:GuiControls.CheckBoxIncludeSymbols.IsChecked
+        ExcludeAmbiguous = [bool]$script:GuiControls.CheckBoxExcludeAmbiguous.IsChecked
+    }
+    $usesGuiPassword = $script:GuiControls.PasswordBoxInitialPassword -and $script:GuiControls.PasswordBoxInitialPassword.SecurePassword.Length -gt 0
+    $passwordInfo = if ($usesGuiPassword) { "Initialpasswort aus dem Eingabefeld" } else { "zufällig ($($passwordOptions.Complexity), nicht gespeichert)" }
+    $expiryInfo = if ($temporaryAccount) { "in 30 Tagen (temporär)" } elseif ($setExpiryDate) { "zufällig in 30-365 Tagen" } else { "keins" }
+
+    $companyName = ([string]$script:GuiControls.TextBoxCompanyName.Text).Trim()
+    if (-not $companyName) { $companyName = "Testfirma" }
+
+    $result = [System.Windows.MessageBox]::Show(
+        "Möchten Sie $userCount zufällige Benutzer erstellen?`n`n" +
+        "Ziel-OU: $userOU`n" +
+        "Zufällige Adressen: $(if ($randomAddresses) { 'Ja' } else { 'Nein' })`n" +
+        "Zufällige Telefonnummern: $(if ($randomPhone) { 'Ja' } else { 'Nein' })`n" +
+        "Passwort: $passwordInfo`n" +
+        "Kontoablauf: $expiryInfo",
+        "Zufallsbenutzer erstellen",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess($userOU, "$userCount Zufallsbenutzer erstellen")) { return }
+
+    Show-Progress -Text "Erstelle zufällige Benutzer..."
+    $successCount = 0
+    $errorCount = 0
+    $usedSamNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $usedObjectNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+    for ($i = 1; $i -le $userCount; $i++) {
+        Write-GuiProgress -Current $i -Total $userCount -Text "Erstelle Benutzer"
+
+        try {
+            $firstName = Get-RandomFirstName
+            $lastName = Get-RandomLastName
+            $samAccountName = Get-UniqueSamAccountName -GivenName $firstName -Surname $lastName -UsedNames $usedSamNames
+
+            $userParams = @{
+                Name = Get-AvailableObjectName -Name "$firstName $lastName" -Path $userOU -Suffix $samAccountName -UsedNames $usedObjectNames
+                SamAccountName = $samAccountName
+                UserPrincipalName = Get-UserPrincipalName -SamAccountName $samAccountName
+                GivenName = $firstName
+                Surname = $lastName
+                DisplayName = "$firstName $lastName"
+                Path = $userOU
+                Enabled = $true
+                AccountPassword = (Get-InitialUserPassword @passwordOptions)
+                ChangePasswordAtLogon = $false
+            }
+
+            if ($randomAddresses) {
+                $userParams.StreetAddress = Get-RandomStreetAddress
+                $userParams.City = Get-RandomCity
+                $userParams.PostalCode = Get-RandomPostalCode
+                $userParams.Country = "DE"
+            }
+            if ($randomPhone) {
+                $userParams.OfficePhone = Get-RandomPhoneNumber
+                $userParams.MobilePhone = Get-RandomPhoneNumber
+            }
+            if ($randomDepartments) { $userParams.Department = Get-RandomDepartment }
+            if ($randomTitles) { $userParams.Title = Get-RandomJobTitle }
+            if ($randomCompany) { $userParams.Company = $companyName }
+
+            if ($temporaryAccount) {
+                $userParams.AccountExpirationDate = (Get-Date).Date.AddDays(30)
+                $userParams.Description = "Temporäres Testkonto (läuft nach 30 Tagen ab)"
+            } elseif ($setExpiryDate) {
+                $userParams.AccountExpirationDate = (Get-Date).Date.AddDays((Get-Random -Minimum 30 -Maximum 366))
+            }
+
+            New-ADUser @userParams -ErrorAction Stop
+            $script:CreatedUsers.Add($samAccountName)
+            $successCount++
+        } catch {
+            Write-AppLog "Fehler beim Erstellen eines Zufallsbenutzers: $($_.Exception.Message)" -Level "ERROR"
+            $errorCount++
+        }
+    }
+
+    Hide-Progress
+    Show-CreatedObjectCount
+    Write-AppLog "Zufallsbenutzer erstellt: $successCount erfolgreich, $errorCount Fehler" -Level "INFO"
+
+    $passwordHint = if ($usesGuiPassword) { "" } else { "`n`nHinweis: Jeder Benutzer hat ein eigenes, zufälliges Passwort erhalten (nicht gespeichert)." }
+    [System.Windows.MessageBox]::Show("Zufallsbenutzer erstellt.`n`nErstellt: $successCount`nFehler: $errorCount`nZiel-OU: $userOU$passwordHint", "Zufallsbenutzer erstellt", "OK", "Information") | Out-Null
 }
 
-function Export-AllObjects {
+function Export-CreatedObject {
     <#
     .SYNOPSIS
     Exportiert alle erstellten Objekte in eine CSV-Datei
     #>
     try {
-        Write-Log "Starte Export aller Objekte..." -Level "INFO"
-        
-        $totalObjects = $Global:CreatedUsers.Count + $Global:CreatedGroups.Count + 
-                       $Global:CreatedComputers.Count + $Global:CreatedOUs.Count + 
-                       $Global:CreatedServiceAccounts.Count
-        
+        Write-AppLog "Starte Export aller Objekte..." -Level "INFO"
+
+        $totalObjects = $script:CreatedUsers.Count + $script:CreatedGroups.Count +
+                       $script:CreatedComputers.Count + $script:CreatedOUs.Count +
+                       $script:CreatedServiceAccounts.Count + $script:CreatedPrinters.Count
+
         if ($totalObjects -eq 0) {
-            Write-Log "Keine Objekte zum Exportieren vorhanden" -Level "WARN"
+            Write-AppLog "Keine Objekte zum Exportieren vorhanden" -Level "WARN"
             [System.Windows.MessageBox]::Show("Es wurden noch keine Objekte erstellt.", "Hinweis", "OK", "Information")
             return
         }
-        
+
         Show-Progress -Text "Exportiere Objekte..."
-        
+
         $exportData = New-Object System.Collections.Generic.List[object]
-        
+
         # Benutzer exportieren
-        foreach ($user in $Global:CreatedUsers) {
+        foreach ($user in $script:CreatedUsers) {
             try {
                 $adUser = Get-ADUser -Identity $user -Properties whenCreated -ErrorAction Stop
                 $exportData.Add([PSCustomObject]@{
@@ -3903,12 +3936,12 @@ function Export-AllObjects {
                     Enabled = $adUser.Enabled
                 })
             } catch {
-                Write-Log "Fehler beim Export von Benutzer '$user': $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler beim Export von Benutzer '$user': $($_.Exception.Message)" -Level "WARN"
             }
         }
-        
+
         # Gruppen exportieren
-        foreach ($group in $Global:CreatedGroups) {
+        foreach ($group in $script:CreatedGroups) {
             try {
                 $adGroup = Get-ADGroup -Identity $group -Properties whenCreated -ErrorAction Stop
                 $exportData.Add([PSCustomObject]@{
@@ -3920,12 +3953,12 @@ function Export-AllObjects {
                     Enabled = "N/A"
                 })
             } catch {
-                Write-Log "Fehler beim Export von Gruppe '$group': $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler beim Export von Gruppe '$group': $($_.Exception.Message)" -Level "WARN"
             }
         }
-        
+
         # Computer exportieren
-        foreach ($computer in $Global:CreatedComputers) {
+        foreach ($computer in $script:CreatedComputers) {
             try {
                 $adComputer = Get-ADComputer -Identity $computer -Properties whenCreated -ErrorAction Stop
                 $exportData.Add([PSCustomObject]@{
@@ -3937,12 +3970,12 @@ function Export-AllObjects {
                     Enabled = $adComputer.Enabled
                 })
             } catch {
-                Write-Log "Fehler beim Export von Computer '$computer': $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler beim Export von Computer '$computer': $($_.Exception.Message)" -Level "WARN"
             }
         }
-        
+
         # OUs dokumentieren
-        foreach ($ou in $Global:CreatedOUs) {
+        foreach ($ou in $script:CreatedOUs) {
             $exportData.Add([PSCustomObject]@{
                 ObjectType = "OU"
                 Name = (($ou -split ',')[0] -replace 'OU=', '')
@@ -3952,9 +3985,9 @@ function Export-AllObjects {
                 Enabled = "N/A"
             })
         }
-        
-        # Service Accounts exportieren
-        foreach ($service in $Global:CreatedServiceAccounts) {
+
+        # Dienstkonten exportieren
+        foreach ($service in $script:CreatedServiceAccounts) {
             try {
                 $adService = Get-ADUser -Identity $service -Properties whenCreated -ErrorAction Stop
                 $exportData.Add([PSCustomObject]@{
@@ -3966,30 +3999,49 @@ function Export-AllObjects {
                     Enabled = $adService.Enabled
                 })
             } catch {
-                Write-Log "Fehler beim Export von Service Account '$service': $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler beim Export von Dienstkonto '$service': $($_.Exception.Message)" -Level "WARN"
             }
         }
-        
+
+        # Drucker exportieren
+        foreach ($printerDn in $script:CreatedPrinters) {
+            try {
+                $adPrinter = Get-ADObject -Identity $printerDn -Properties whenCreated -ErrorAction Stop
+                $exportData.Add([PSCustomObject]@{
+                    ObjectType = "Printer"
+                    Name = $adPrinter.Name
+                    SamAccountName = "N/A"
+                    DistinguishedName = $adPrinter.DistinguishedName
+                    Created = $adPrinter.whenCreated
+                    Enabled = "N/A"
+                })
+            } catch {
+                Write-AppLog "Fehler beim Export von Drucker '$printerDn': $($_.Exception.Message)" -Level "WARN"
+            }
+        }
+
         # Export
         $exportPath = (Get-ExportFilePath -FileName "AllCreatedObjects_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
         $exportData | Export-Csv -Path $exportPath -NoTypeInformation -Encoding UTF8
-        
+
         Hide-Progress
-        
-        $message = "Export erfolgreich abgeschlossen:`n`nExportierte Objekte: $($exportData.Count)`n- Benutzer: $($Global:CreatedUsers.Count)`n- Gruppen: $($Global:CreatedGroups.Count)`n- Computer: $($Global:CreatedComputers.Count)`n- OUs: $($Global:CreatedOUs.Count)`n- Service Accounts: $($Global:CreatedServiceAccounts.Count)`n`nDatei: $exportPath"
-        
+
+        $message = "Export erfolgreich abgeschlossen:`n`nExportierte Objekte: $($exportData.Count)`n- Benutzer: $($script:CreatedUsers.Count)`n- Gruppen: $($script:CreatedGroups.Count)`n- Computer: $($script:CreatedComputers.Count)`n- OUs: $($script:CreatedOUs.Count)`n- Dienstkonten: $($script:CreatedServiceAccounts.Count)`n- Drucker: $($script:CreatedPrinters.Count)`n`nDatei: $exportPath"
+
         [System.Windows.MessageBox]::Show($message, "Export abgeschlossen", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler beim Export: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Export: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler beim Export:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Quick-CreateGroups {
+function New-StandardTestGroup {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Schnell-Erstellung von Gruppen..." -Level "INFO"
+        Write-AppLog "Starte Schnell-Erstellung von Gruppen..." -Level "INFO"
 
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie Standard-Gruppen erstellen?`n`n- Benutzer`n- Administratoren`n- Gäste",
@@ -3999,6 +4051,7 @@ function Quick-CreateGroups {
         )
 
         if ($result -ne "Yes") { return }
+        if (-not $PSCmdlet.ShouldProcess("Test-OU GROUPS", "Standard-Testgruppen erstellen")) { return }
 
         Show-Progress -Text "Erstelle Gruppen..."
         $processed = 0
@@ -4017,7 +4070,7 @@ function Quick-CreateGroups {
                 # Vorhandene (z.B. integrierte) Gruppen gleichen Namens nicht anfassen
                 $existing = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $group.Name)' -or SamAccountName -eq '$(ConvertTo-ADFilterValue -Value $group.Name)'" -ErrorAction SilentlyContinue
                 if ($existing) {
-                    Write-Log "Gruppe $($group.Name) existiert bereits, übersprungen" -Level "WARN"
+                    Write-AppLog "Gruppe $($group.Name) existiert bereits, übersprungen" -Level "WARN"
                     $failed++
                 } else {
                     New-ADGroup -Name $group.Name `
@@ -4025,32 +4078,32 @@ function Quick-CreateGroups {
                         -GroupCategory Security `
                         -Description $group.Description `
                         -ErrorAction Stop
-                    
-                    $Global:CreatedGroups.Add($group.Name)
-                    Write-Log "Gruppe $($group.Name) erfolgreich erstellt" -Level "SUCCESS"
+
+                    $script:CreatedGroups.Add($group.Name)
+                    Write-AppLog "Gruppe $($group.Name) erfolgreich erstellt" -Level "SUCCESS"
                     $processed++
                 }
             }
             catch {
-                Write-Log "Fehler beim Erstellen der Gruppe $($group.Name): $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Erstellen der Gruppe $($group.Name): $($_.Exception.Message)" -Level "ERROR"
                 $failed++
             }
-            
-            Update-Progress -Current $current -Total $groups.Count
+
+            Write-GuiProgress -Current $current -Total $groups.Count
         }
 
         Hide-Progress
-        Update-Statistics
+        Show-CreatedObjectCount
         [System.Windows.MessageBox]::Show("Gruppen-Erstellung abgeschlossen.`n$processed Gruppen erstellt, $failed Fehler.", "Vorgang abgeschlossen", "OK", "Information")
 
     }
     catch {
-        Write-Log "Fehler bei Gruppen-Erstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Gruppen-Erstellung: $($_.Exception.Message)" -Level "ERROR"
         Hide-Progress
     }
 }
 
-function Ensure-TestOUs {
+function Initialize-TestOU {
     <#
     .SYNOPSIS
     Erstellt dedizierte Test-OUs für verschiedene Objekttypen
@@ -4058,76 +4111,79 @@ function Ensure-TestOUs {
     param(
         [string]$BaseOU
     )
-    
+
     try {
-        Write-Log "Erstelle dedizierte Test-OUs..." -Level "INFO"
-        
+        Write-AppLog "Erstelle dedizierte Test-OUs..." -Level "INFO"
+
         $testOUs = @{
-            "USERS" = "Test User Accounts"
-            "GROUPS" = "Test Security Groups"
-            "COMPUTERS" = "Test Computer Accounts"
-            "SERVICES" = "Test Service Accounts"
-            "RESOURCES" = "Test Resources"
+            "USERS" = "Test-Benutzerkonten"
+            "GROUPS" = "Test-Sicherheitsgruppen"
+            "COMPUTERS" = "Test-Computerkonten"
+            "SERVICES" = "Test-Dienstkonten"
+            "RESOURCES" = "Test-Ressourcen"
         }
-        
+
         $createdOUs = @{}
-        
+
         foreach ($ouName in $testOUs.Keys) {
             $ouPath = "OU=$ouName,$BaseOU"
-            
+
             try {
                 # Prüfe ob OU bereits existiert
                 $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $ouPath)'" -ErrorAction SilentlyContinue
-                
+
                 if (-not $existingOU) {
                     New-ADOrganizationalUnit -Name $ouName `
                         -Path $BaseOU `
                         -Description $testOUs[$ouName] `
                         -ProtectedFromAccidentalDeletion $false `
                         -ErrorAction Stop
-                    
-                    $Global:CreatedOUs.Add($ouPath)
-                    Write-Log "Test-OU '$ouName' erstellt: $ouPath" -Level "SUCCESS"
+
+                    $script:CreatedOUs.Add($ouPath)
+                    Write-AppLog "Test-OU '$ouName' erstellt: $ouPath" -Level "SUCCESS"
                 } else {
-                    Write-Log "Test-OU '$ouName' existiert bereits: $ouPath" -Level "INFO"
+                    Write-AppLog "Test-OU '$ouName' existiert bereits: $ouPath" -Level "INFO"
                 }
-                
+
                 # Immer zum Dictionary hinzufügen, auch wenn sie bereits existiert
                 $createdOUs[$ouName] = $ouPath
-                
+
             } catch {
-                Write-Log "Fehler beim Erstellen der Test-OU '$ouName': $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Erstellen der Test-OU '$ouName': $($_.Exception.Message)" -Level "ERROR"
                 # Fallback zur Basis-OU
                 $createdOUs[$ouName] = $BaseOU
             }
         }
-        
+
         return $createdOUs
-        
+
     } catch {
-        Write-Log "Fehler beim Erstellen der Test-OUs: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Erstellen der Test-OUs: $($_.Exception.Message)" -Level "ERROR"
         return @{}
     }
 }
 
-function Quick-CreateTestData {
+function New-QuickTestDataSet {
+    <#
+    .SYNOPSIS
+    Erstellt einen kleinen Testdatensatz (Benutzer mit Zufallsattributen und Abteilungsgruppen) in den Test-OUs
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Erstellung von Testdaten..." -Level "INFO"
+        Write-AppLog "Starte Erstellung von Testdaten..." -Level "INFO"
 
         # Ermittle Ziel-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
+        $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
         if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
             $domain = Get-ADDomain
             $targetOU = $domain.DistinguishedName
         }
-        
-        # Erstelle dedizierte Test-OUs
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
 
         # Anzahl der zu erstellenden Benutzer aus TextBox oder Standard
         $numUsers = 10
         $parsedNum = 0
-        if ([int]::TryParse(([string]$Global:GuiControls.TextBoxNumUsersToCreate.Text).Trim(), [ref]$parsedNum) -and $parsedNum -gt 0) {
+        if ([int]::TryParse(([string]$script:GuiControls.TextBoxNumUsersToCreate.Text).Trim(), [ref]$parsedNum) -and $parsedNum -gt 0) {
             $numUsers = $parsedNum
         }
 
@@ -4139,20 +4195,26 @@ function Quick-CreateTestData {
         )
 
         if ($result -ne "Yes") { return }
+        if (-not $PSCmdlet.ShouldProcess($targetOU, "Komplettes Testdaten-Set erstellen")) { return }
 
         Show-Progress -Text "Erstelle Testdaten..."
-        
+
+        # Erstelle dedizierte Test-OUs
+        $testOUs = Initialize-TestOU -BaseOU $targetOU
+
         # Verwende die USERS OU für Benutzer
         $userOU = if ($testOUs["USERS"]) { $testOUs["USERS"] } else { $targetOU }
         $groupOU = if ($testOUs["GROUPS"]) { $testOUs["GROUPS"] } else { $targetOU }
-        
+
         # Testbenutzer erstellen
         $userSuccess = 0
         $userError = 0
         $departments = @("IT", "HR", "Finance", "Sales", "Marketing")
         $usersByDepartment = @{}
         foreach ($dept in $departments) { $usersByDepartment[$dept] = New-Object System.Collections.Generic.List[string] }
-        
+        $usedSamNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $usedCNs = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
         for ($i = 1; $i -le $numUsers; $i++) {
             try {
                 # Zufällige Daten generieren
@@ -4161,53 +4223,51 @@ function Quick-CreateTestData {
                 $department = $departments | Get-Random
                 $title = Get-RandomJobTitle
                 $city = Get-RandomCity
-                # sAMAccountName max. 20 Zeichen, nur unkritische Zeichen
-                $samBase = ("$firstName.$lastName".ToLower() -replace 'ä','ae' -replace 'ö','oe' -replace 'ü','ue' -replace 'ß','ss' -replace '[^a-z0-9.]','')
-                $suffix = [string]$i
-                if ($samBase.Length + $suffix.Length -gt 20) { $samBase = $samBase.Substring(0, 20 - $suffix.Length) }
-                $samAccountName = "$samBase$suffix"
-                
+                # Eindeutiger sAMAccountName (max. 20 Zeichen) und eindeutiger CN in der Ziel-OU
+                $samAccountName = Get-UniqueSamAccountName -GivenName $firstName -Surname $lastName -UsedNames $usedSamNames
+                $commonName = Get-AvailableObjectName -Name "$firstName $lastName" -Path $userOU -Suffix $samAccountName -UsedNames $usedCNs
+
                 $user = @{
-                    Name = "$firstName.$lastName$suffix"
+                    Name = $commonName
                     SamAccountName = $samAccountName
-                    UserPrincipalName = "$samAccountName@$((Get-CachedADDomain).DNSRoot)"
+                    UserPrincipalName = (Get-UserPrincipalName -SamAccountName $samAccountName)
                     GivenName = $firstName
                     Surname = $lastName
                     DisplayName = "$firstName $lastName"
                     Department = $department
                     Title = $title
                     City = $city
-                    Company = "Test Company"
+                    Company = "Testfirma"
                     StreetAddress = Get-RandomStreetAddress
                     PostalCode = Get-RandomPostalCode
                     OfficePhone = Get-RandomPhoneNumber
                     Path = $userOU
                     Enabled = $true
-                    AccountPassword = (New-RandomSecurePassword -Complexity "Mittel (12 Zeichen + Symbole)")
+                    AccountPassword = (Get-InitialUserPassword)
                     ChangePasswordAtLogon = $true
                 }
-                
+
                 New-ADUser @user -ErrorAction Stop
-                $Global:CreatedUsers.Add($user.SamAccountName)
+                $script:CreatedUsers.Add($user.SamAccountName)
                 $usersByDepartment[$department].Add($user.SamAccountName)
-                Write-Log "Testbenutzer '$($user.DisplayName)' in OU '$userOU' erstellt" -Level "SUCCESS"
+                Write-AppLog "Testbenutzer '$($user.DisplayName)' in OU '$userOU' erstellt" -Level "SUCCESS"
                 $userSuccess++
             }
             catch {
-                Write-Log "Fehler beim Erstellen von Testbenutzer $($i): $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Erstellen von Testbenutzer $($i): $($_.Exception.Message)" -Level "ERROR"
                 $userError++
             }
-            
-            Update-Progress -Current $i -Total $numUsers -Text "Erstelle Testbenutzer $i von $numUsers..."
+
+            Write-GuiProgress -Current $i -Total $numUsers -Text "Erstelle Testbenutzer"
         }
 
         # Testgruppen erstellen
-        Update-Progress -Current 0 -Total 5 -Text "Erstelle Testgruppen..."
+        Write-GuiProgress -Current 0 -Total 5 -Text "Erstelle Testgruppen..."
         $groupSuccess = 0
         $groupError = 0
-        
+
         # Erstelle Gruppen basierend auf den verwendeten Departments
-        
+
         foreach ($dept in $departments) {
             try {
                 $groupName = "TEST_${dept}_Users"
@@ -4217,31 +4277,31 @@ function Quick-CreateTestData {
                     -Description "Testgruppe für $dept" `
                     -Path $groupOU `
                     -ErrorAction Stop
-                
-                $Global:CreatedGroups.Add($groupName)
-                Write-Log "Testgruppe '$groupName' erstellt" -Level "SUCCESS"
+
+                $script:CreatedGroups.Add($groupName)
+                Write-AppLog "Testgruppe '$groupName' erstellt" -Level "SUCCESS"
                 $groupSuccess++
-                
+
                 # Füge die in diesem Lauf erstellten Benutzer der Abteilung hinzu (ein AD-Aufruf pro Gruppe)
                 $deptUsers = $usersByDepartment[$dept]
                 if ($deptUsers.Count -gt 0) {
                     try {
                         Add-ADGroupMember -Identity $groupName -Members $deptUsers.ToArray() -ErrorAction Stop
-                        Write-Log "$($deptUsers.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
+                        Write-AppLog "$($deptUsers.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
                     } catch {
-                        Write-Log "Fehler beim Hinzufügen von Benutzern zu Gruppe '$groupName': $($_.Exception.Message)" -Level "WARN"
+                        Write-AppLog "Fehler beim Hinzufügen von Benutzern zu Gruppe '$groupName': $($_.Exception.Message)" -Level "WARN"
                     }
                 }
             }
             catch {
-                Write-Log "Fehler beim Erstellen von Testgruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Erstellen von Testgruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
                 $groupError++
             }
         }
 
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = @"
 Testdaten erfolgreich erstellt:
 
@@ -4251,18 +4311,18 @@ Benutzer:
 - Ziel-OU: $userOU
 
 Gruppen:
-- Erstellt: $groupSuccess  
+- Erstellt: $groupSuccess
 - Fehler: $groupError
 
 Die Benutzer wurden mit zufälligen Attributen und
 zufälligen Initial-Passwörtern erstellt.
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "Testdaten erstellt", "OK", "Information")
 
     }
     catch {
-        Write-Log "Fehler bei Testdaten-Erstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Testdaten-Erstellung: $($_.Exception.Message)" -Level "ERROR"
         Hide-Progress
     }
 }
@@ -4285,16 +4345,17 @@ function Get-OUContentOwnership {
 
     $comparer = [System.StringComparer]::OrdinalIgnoreCase
     $ownedSam = New-Object 'System.Collections.Generic.HashSet[string]' ($comparer)
-    foreach ($name in @($Global:CreatedUsers) + @($Global:CreatedServiceAccounts) + @($Global:CreatedGroups)) {
+    foreach ($name in @($script:CreatedUsers) + @($script:CreatedServiceAccounts) + @($script:CreatedGroups)) {
         if ($name) { [void]$ownedSam.Add([string]$name) }
     }
-    foreach ($name in $Global:CreatedComputers) {
+    foreach ($name in $script:CreatedComputers) {
         if ($name) { [void]$ownedSam.Add(([string]$name).TrimEnd('$') + '$') }
     }
     $ownedOUs = New-Object 'System.Collections.Generic.HashSet[string]' ($comparer)
-    foreach ($ou in $Global:CreatedOUs) { if ($ou) { [void]$ownedOUs.Add([string]$ou) } }
+    foreach ($ou in $script:CreatedOUs) { if ($ou) { [void]$ownedOUs.Add([string]$ou) } }
 
     $ownedLeafDNs = New-Object 'System.Collections.Generic.HashSet[string]' ($comparer)
+    foreach ($printerDn in $script:CreatedPrinters) { if ($printerDn) { [void]$ownedLeafDNs.Add([string]$printerDn) } }
     $foreign = New-Object System.Collections.Generic.List[object]
     $ownedNames = New-Object System.Collections.Generic.List[string]
 
@@ -4310,6 +4371,9 @@ function Get-OUContentOwnership {
         $sam = [string]$obj.sAMAccountName
 
         if ($obj.ObjectClass -eq 'organizationalUnit' -and $ownedOUs.Contains($dn)) {
+            continue
+        } elseif ($ownedLeafDNs.Contains($dn)) {
+            # Vom Tool erstellter Drucker (printQueue, ohne sAMAccountName)
             continue
         } elseif ($sam -and $ownedSam.Contains($sam)) {
             [void]$ownedLeafDNs.Add($dn)
@@ -4337,20 +4401,20 @@ function Remove-ToolCreatedOU {
     .OUTPUTS
     'Deleted', 'NotFound' oder 'Skipped'
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Bestätigung erfolgt über GUI-Dialoge')]
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([string])]
     param([Parameter(Mandatory = $true)][string]$DistinguishedName)
 
     $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $DistinguishedName)'" -ErrorAction SilentlyContinue
     if (-not $existingOU) {
-        Write-Log "OU '$DistinguishedName' nicht gefunden, übersprungen" -Level "WARN"
+        Write-AppLog "OU '$DistinguishedName' nicht gefunden, übersprungen" -Level "WARN"
         return 'NotFound'
     }
 
     $ownership = Get-OUContentOwnership -OUDistinguishedName $DistinguishedName
     if ($ownership.Foreign.Count -gt 0) {
         $sample = ($ownership.Foreign | Select-Object -First 5 | ForEach-Object { "- $($_.DistinguishedName)" }) -join "`n"
-        Write-Log "OU '$DistinguishedName' enthält $($ownership.Foreign.Count) Fremdobjekt(e)" -Level "WARN"
+        Write-AppLog "OU '$DistinguishedName' enthält $($ownership.Foreign.Count) Fremdobjekt(e)" -Level "WARN"
         Set-UiBusyState -Busy $false
         $answer = [System.Windows.MessageBox]::Show(
             "Die OU`n$DistinguishedName`nenthält $($ownership.Foreign.Count) Objekt(e), die NICHT von diesem Tool erstellt wurden, z.B.:`n$sample`n`n" +
@@ -4358,11 +4422,13 @@ function Remove-ToolCreatedOU {
             "Fremdobjekte in OU gefunden", "YesNo", "Warning", "No")
         Set-UiBusyState -Busy $true
         if ($answer -ne "Yes") {
-            Write-Log "OU '$DistinguishedName' wegen Fremdobjekten übersprungen" -Level "WARN"
+            Write-AppLog "OU '$DistinguishedName' wegen Fremdobjekten übersprungen" -Level "WARN"
             return 'Skipped'
         }
-        Write-Log "Löschen der OU '$DistinguishedName' inkl. Fremdobjekten vom Benutzer bestätigt" -Level "WARN"
+        Write-AppLog "Löschen der OU '$DistinguishedName' inkl. Fremdobjekten vom Benutzer bestätigt" -Level "WARN"
     }
+
+    if (-not $PSCmdlet.ShouldProcess($DistinguishedName, "OU rekursiv löschen")) { return 'Skipped' }
 
     # Schutz vor versehentlichem Löschen entfernen und OU rekursiv löschen
     Set-ADOrganizationalUnit -Identity $DistinguishedName -ProtectedFromAccidentalDeletion $false -ErrorAction Stop
@@ -4370,295 +4436,310 @@ function Remove-ToolCreatedOU {
 
     # Mitgelöschte Tool-Objekte aus den Nachverfolgungslisten entfernen
     foreach ($name in $ownership.OwnedNames) {
-        foreach ($list in @($Global:CreatedUsers, $Global:CreatedServiceAccounts, $Global:CreatedGroups, $Global:CreatedComputers)) {
+        foreach ($list in @($script:CreatedUsers, $script:CreatedServiceAccounts, $script:CreatedGroups, $script:CreatedComputers)) {
             while ($list.Remove($name)) { }
         }
     }
-    foreach ($ou in @($Global:CreatedOUs)) {
-        if ($ou -like "*,$DistinguishedName") { [void]$Global:CreatedOUs.Remove($ou) }
+    foreach ($ou in @($script:CreatedOUs)) {
+        if ($ou -like "*,$DistinguishedName") { [void]$script:CreatedOUs.Remove($ou) }
+    }
+    foreach ($printerDn in @($script:CreatedPrinters)) {
+        if ($printerDn -like "*,$DistinguishedName") { [void]$script:CreatedPrinters.Remove($printerDn) }
     }
     return 'Deleted'
 }
 
-function Remove-CreatedGroups {
+function Remove-CreatedGroup {
     <#
     .SYNOPSIS
     Löscht alle erstellten Gruppen
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Löschung aller erstellten Gruppen..." -Level "INFO"
-        
-        if (-not $Global:CreatedGroups -or $Global:CreatedGroups.Count -eq 0) {
-            Write-Log "Keine Gruppen zum Löschen vorhanden" -Level "WARN"
+        Write-AppLog "Starte Löschung aller erstellten Gruppen..." -Level "INFO"
+
+        if (-not $script:CreatedGroups -or $script:CreatedGroups.Count -eq 0) {
+            Write-AppLog "Keine Gruppen zum Löschen vorhanden" -Level "WARN"
             [System.Windows.MessageBox]::Show("Es wurden noch keine Gruppen erstellt.", "Hinweis", "OK", "Information")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie wirklich ALLE $($Global:CreatedGroups.Count) erstellten Gruppen löschen?`n`n" +
+            "Möchten Sie wirklich ALLE $($script:CreatedGroups.Count) erstellten Gruppen löschen?`n`n" +
             "Diese Aktion kann nicht rückgängig gemacht werden!",
             "Gruppen löschen", "YesNo", "Warning")
-        
+
         if ($result -ne "Yes") {
-            Write-Log "Gruppenlöschung abgebrochen" -Level "INFO"
+            Write-AppLog "Gruppenlöschung abgebrochen" -Level "INFO"
             return
         }
-        
+        if (-not $PSCmdlet.ShouldProcess("$($script:CreatedGroups.Count) erstellte Gruppen", "Löschen")) { return }
+
         Show-Progress -Text "Lösche Gruppen..."
-        
+
         $deletedCount = 0
         $errorCount = 0
-        $total = $Global:CreatedGroups.Count
-        
+        $total = $script:CreatedGroups.Count
+
         # In umgekehrter Reihenfolge löschen (zuletzt erstellte zuerst)
-        $groupsToDelete = @(@($Global:CreatedGroups) | Sort-Object -Descending)
-        
+        $groupsToDelete = @(@($script:CreatedGroups) | Sort-Object -Descending)
+
         for ($i = 0; $i -lt $groupsToDelete.Count; $i++) {
             $groupName = $groupsToDelete[$i]
-            Update-Progress -Current ($i + 1) -Total $total -Text "Lösche Gruppe: $groupName"
-            
+            Write-GuiProgress -Current ($i + 1) -Total $total -Text "Lösche Gruppe: $groupName"
+
             try {
                 Remove-ADGroup -Identity $groupName -Confirm:$false -ErrorAction Stop
-                Write-Log "Gruppe '$groupName' gelöscht" -Level "SUCCESS"
+                Write-AppLog "Gruppe '$groupName' gelöscht" -Level "SUCCESS"
                 $deletedCount++
-                [void]$Global:CreatedGroups.Remove($groupName)
+                [void]$script:CreatedGroups.Remove($groupName)
             } catch {
                 if (Test-ADIdentityNotFound -ErrorRecord $_) {
-                    Write-Log "Gruppe '$groupName' existiert nicht mehr" -Level "INFO"
-                    [void]$Global:CreatedGroups.Remove($groupName)
+                    Write-AppLog "Gruppe '$groupName' existiert nicht mehr" -Level "INFO"
+                    [void]$script:CreatedGroups.Remove($groupName)
                 } else {
-                    Write-Log "Fehler beim Löschen der Gruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Löschen der Gruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
             }
         }
-        
+
         # Nicht gelöschte Gruppen bleiben in der Liste, damit sie erneut bereinigt werden können
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = "Gruppenlöschung abgeschlossen:`n`nGelöscht: $deletedCount`nFehler: $errorCount"
         [System.Windows.MessageBox]::Show($message, "Abgeschlossen", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei Gruppenlöschung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Gruppenlöschung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Gruppenlöschung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Remove-CreatedComputers {
+function Remove-CreatedComputer {
     <#
     .SYNOPSIS
     Löscht alle erstellten Computer
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Löschung aller erstellten Computer..." -Level "INFO"
-        
-        if (-not $Global:CreatedComputers -or $Global:CreatedComputers.Count -eq 0) {
-            Write-Log "Keine Computer zum Löschen vorhanden" -Level "WARN"
+        Write-AppLog "Starte Löschung aller erstellten Computer..." -Level "INFO"
+
+        if (-not $script:CreatedComputers -or $script:CreatedComputers.Count -eq 0) {
+            Write-AppLog "Keine Computer zum Löschen vorhanden" -Level "WARN"
             [System.Windows.MessageBox]::Show("Es wurden noch keine Computer erstellt.", "Hinweis", "OK", "Information")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie wirklich ALLE $($Global:CreatedComputers.Count) erstellten Computer löschen?`n`n" +
+            "Möchten Sie wirklich ALLE $($script:CreatedComputers.Count) erstellten Computer löschen?`n`n" +
             "Diese Aktion kann nicht rückgängig gemacht werden!",
             "Computer löschen", "YesNo", "Warning")
-        
+
         if ($result -ne "Yes") {
-            Write-Log "Computerlöschung abgebrochen" -Level "INFO"
+            Write-AppLog "Computerlöschung abgebrochen" -Level "INFO"
             return
         }
-        
+        if (-not $PSCmdlet.ShouldProcess("$($script:CreatedComputers.Count) erstellte Computer", "Löschen")) { return }
+
         Show-Progress -Text "Lösche Computer..."
-        
+
         $deletedCount = 0
         $errorCount = 0
-        $total = $Global:CreatedComputers.Count
-        
-        $computersToDelete = @($Global:CreatedComputers)
+        $total = $script:CreatedComputers.Count
+
+        $computersToDelete = @($script:CreatedComputers)
         for ($i = 0; $i -lt $computersToDelete.Count; $i++) {
             $computerName = $computersToDelete[$i]
-            Update-Progress -Current ($i + 1) -Total $total -Text "Lösche Computer: $computerName"
-            
+            Write-GuiProgress -Current ($i + 1) -Total $total -Text "Lösche Computer: $computerName"
+
             try {
                 # Recursive: entfernt auch vom Tool angelegte Unterobjekte (z.B. BitLocker-Recovery-Informationen)
                 Get-ADComputer -Identity $computerName -ErrorAction Stop | Remove-ADObject -Recursive -Confirm:$false -ErrorAction Stop
-                Write-Log "Computer '$computerName' gelöscht" -Level "SUCCESS"
+                Write-AppLog "Computer '$computerName' gelöscht" -Level "SUCCESS"
                 $deletedCount++
-                [void]$Global:CreatedComputers.Remove($computerName)
+                [void]$script:CreatedComputers.Remove($computerName)
             } catch {
                 if (Test-ADIdentityNotFound -ErrorRecord $_) {
-                    Write-Log "Computer '$computerName' existiert nicht mehr" -Level "INFO"
-                    [void]$Global:CreatedComputers.Remove($computerName)
+                    Write-AppLog "Computer '$computerName' existiert nicht mehr" -Level "INFO"
+                    [void]$script:CreatedComputers.Remove($computerName)
                 } else {
-                    Write-Log "Fehler beim Löschen des Computers '$computerName': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Löschen des Computers '$computerName': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
             }
         }
-        
+
         # Nicht gelöschte Computer bleiben in der Liste
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = "Computerlöschung abgeschlossen:`n`nGelöscht: $deletedCount`nFehler: $errorCount"
         [System.Windows.MessageBox]::Show($message, "Abgeschlossen", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei Computerlöschung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Computerlöschung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Computerlöschung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Remove-CreatedOUs {
+function Remove-CreatedOU {
     <#
     .SYNOPSIS
     Löscht alle erstellten OUs
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Löschung aller erstellten OUs..." -Level "INFO"
-        
-        if (-not $Global:CreatedOUs -or $Global:CreatedOUs.Count -eq 0) {
-            Write-Log "Keine OUs zum Löschen vorhanden" -Level "WARN"
+        Write-AppLog "Starte Löschung aller erstellten OUs..." -Level "INFO"
+
+        if (-not $script:CreatedOUs -or $script:CreatedOUs.Count -eq 0) {
+            Write-AppLog "Keine OUs zum Löschen vorhanden" -Level "WARN"
             [System.Windows.MessageBox]::Show("Es wurden noch keine OUs erstellt.", "Hinweis", "OK", "Information")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie wirklich ALLE $($Global:CreatedOUs.Count) erstellten OUs löschen?`n`n" +
+            "Möchten Sie wirklich ALLE $($script:CreatedOUs.Count) erstellten OUs löschen?`n`n" +
             "ACHTUNG: Dies löscht auch alle Objekte in diesen OUs!`n`n" +
             "Diese Aktion kann nicht rückgängig gemacht werden!",
             "OUs löschen", "YesNo", "Warning")
-        
+
         if ($result -ne "Yes") {
-            Write-Log "OU-Löschung abgebrochen" -Level "INFO"
+            Write-AppLog "OU-Löschung abgebrochen" -Level "INFO"
             return
         }
-        
+        if (-not $PSCmdlet.ShouldProcess("$($script:CreatedOUs.Count) erstellte OUs", "Löschen")) { return }
+
         Show-Progress -Text "Lösche OUs..."
-        
+
         $deletedCount = 0
         $errorCount = 0
         $skippedCount = 0
-        
+
         # Sortiere OUs nach Tiefe (tiefste zuerst)
-        $ousToDelete = @(@($Global:CreatedOUs) | Sort-Object { ($_ -split ',').Count } -Descending)
+        $ousToDelete = @(@($script:CreatedOUs) | Sort-Object { ($_ -split ',').Count } -Descending)
         $total = $ousToDelete.Count
-        
+
         for ($i = 0; $i -lt $ousToDelete.Count; $i++) {
             $ou = $ousToDelete[$i]
-            Update-Progress -Current ($i + 1) -Total $total -Text "Lösche OU: $ou"
-            
+            Write-GuiProgress -Current ($i + 1) -Total $total -Text "Lösche OU: $ou"
+
             try {
                 # Nur vom Tool erstellte OUs; bei Fremdobjekten wird explizit nachgefragt
                 $status = Remove-ToolCreatedOU -DistinguishedName $ou
                 switch ($status) {
                     'Deleted' {
-                        Write-Log "OU '$ou' und alle enthaltenen Objekte gelöscht" -Level "SUCCESS"
+                        Write-AppLog "OU '$ou' und alle enthaltenen Objekte gelöscht" -Level "SUCCESS"
                         $deletedCount++
-                        [void]$Global:CreatedOUs.Remove($ou)
+                        [void]$script:CreatedOUs.Remove($ou)
                     }
-                    'NotFound' { [void]$Global:CreatedOUs.Remove($ou) }
+                    'NotFound' { [void]$script:CreatedOUs.Remove($ou) }
                     default { $skippedCount++ }
                 }
             } catch {
-                Write-Log "Fehler beim Löschen der OU '$ou': $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Löschen der OU '$ou': $($_.Exception.Message)" -Level "ERROR"
                 $errorCount++
             }
         }
-        
+
         # Übersprungene/fehlgeschlagene OUs bleiben in der Liste
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = "OU-Löschung abgeschlossen:`n`nGelöscht: $deletedCount`nÜbersprungen: $skippedCount`nFehler: $errorCount"
         [System.Windows.MessageBox]::Show($message, "Abgeschlossen", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei OU-Löschung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei OU-Löschung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der OU-Löschung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Remove-CreatedServiceAccounts {
+function Remove-CreatedServiceAccount {
     <#
     .SYNOPSIS
-    Löscht alle erstellten Service Accounts
+    Löscht alle erstellten Dienstkonten
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Löschung aller erstellten Service Accounts..." -Level "INFO"
-        
-        if (-not $Global:CreatedServiceAccounts -or $Global:CreatedServiceAccounts.Count -eq 0) {
-            Write-Log "Keine Service Accounts zum Löschen vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Service Accounts erstellt.", "Hinweis", "OK", "Information")
+        Write-AppLog "Starte Löschung aller erstellten Dienstkonten..." -Level "INFO"
+
+        if (-not $script:CreatedServiceAccounts -or $script:CreatedServiceAccounts.Count -eq 0) {
+            Write-AppLog "Keine Dienstkonten zum Löschen vorhanden" -Level "WARN"
+            [System.Windows.MessageBox]::Show("Es wurden noch keine Dienstkonten erstellt.", "Hinweis", "OK", "Information")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie wirklich ALLE $($Global:CreatedServiceAccounts.Count) erstellten Service Accounts löschen?`n`n" +
+            "Möchten Sie wirklich ALLE $($script:CreatedServiceAccounts.Count) erstellten Dienstkonten löschen?`n`n" +
             "Diese Aktion kann nicht rückgängig gemacht werden!",
-            "Service Accounts löschen", "YesNo", "Warning")
-        
+            "Dienstkonten löschen", "YesNo", "Warning")
+
         if ($result -ne "Yes") {
-            Write-Log "Service Account Löschung abgebrochen" -Level "INFO"
+            Write-AppLog "Dienstkonto-Löschung abgebrochen" -Level "INFO"
             return
         }
-        
-        Show-Progress -Text "Lösche Service Accounts..."
-        
+        if (-not $PSCmdlet.ShouldProcess("$($script:CreatedServiceAccounts.Count) erstellte Dienstkonten", "Löschen")) { return }
+
+        Show-Progress -Text "Lösche Dienstkonten..."
+
         $deletedCount = 0
         $errorCount = 0
-        $total = $Global:CreatedServiceAccounts.Count
-        
-        $accountsToDelete = @($Global:CreatedServiceAccounts)
+        $total = $script:CreatedServiceAccounts.Count
+
+        $accountsToDelete = @($script:CreatedServiceAccounts)
         for ($i = 0; $i -lt $accountsToDelete.Count; $i++) {
             $accountName = $accountsToDelete[$i]
-            Update-Progress -Current ($i + 1) -Total $total -Text "Lösche Service Account: $accountName"
-            
+            Write-GuiProgress -Current ($i + 1) -Total $total -Text "Lösche Dienstkonto: $accountName"
+
             try {
                 Remove-ADUser -Identity $accountName -Confirm:$false -ErrorAction Stop
-                Write-Log "Service Account '$accountName' gelöscht" -Level "SUCCESS"
+                Write-AppLog "Dienstkonto '$accountName' gelöscht" -Level "SUCCESS"
                 $deletedCount++
-                [void]$Global:CreatedServiceAccounts.Remove($accountName)
+                [void]$script:CreatedServiceAccounts.Remove($accountName)
             } catch {
                 if (Test-ADIdentityNotFound -ErrorRecord $_) {
-                    Write-Log "Service Account '$accountName' existiert nicht mehr" -Level "INFO"
-                    [void]$Global:CreatedServiceAccounts.Remove($accountName)
+                    Write-AppLog "Dienstkonto '$accountName' existiert nicht mehr" -Level "INFO"
+                    [void]$script:CreatedServiceAccounts.Remove($accountName)
                 } else {
-                    Write-Log "Fehler beim Löschen des Service Accounts '$accountName': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Löschen des Dienstkontos '$accountName': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
             }
         }
-        
-        # Nicht gelöschte Service Accounts bleiben in der Liste
-        
+
+        # Nicht gelöschte Dienstkonten bleiben in der Liste
+
         Hide-Progress
-        Update-Statistics
-        
-        $message = "Service Account Löschung abgeschlossen:`n`nGelöscht: $deletedCount`nFehler: $errorCount"
+        Show-CreatedObjectCount
+
+        $message = "Dienstkonto-Löschung abgeschlossen:`n`nGelöscht: $deletedCount`nFehler: $errorCount"
         [System.Windows.MessageBox]::Show($message, "Abgeschlossen", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei Service Account Löschung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Service Account Löschung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
+        Write-AppLog "Fehler bei Dienstkonto-Löschung: $($_.Exception.Message)" -Level "ERROR"
+        [System.Windows.MessageBox]::Show("Fehler bei der Dienstkonto-Löschung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Quick-CleanupAll {
+function Clear-CreatedTestData {
     try {
-        Write-Log "Starte Bereinigung..." -Level "INFO"
+        Write-AppLog "Starte Bereinigung..." -Level "INFO"
 
         $result = [System.Windows.MessageBox]::Show(
-            "WARNUNG: Dies löscht alle von diesem Tool erstellten Gruppen, Computer, Test-OUs und Service-Accounts!`n`n" +
+            "WARNUNG: Dies löscht alle von diesem Tool erstellten Gruppen, Computer, Dienstkonten, Drucker und Test-OUs!`n`n" +
             "(Benutzer werden NICHT einzeln gelöscht - vom Tool erstellte Benutzer innerhalb gelöschter Test-OUs werden jedoch mit entfernt.`n" +
             "Enthält eine OU fremde Objekte, wird vorher separat nachgefragt.)`n`nMöchten Sie fortfahren?",
             "Bereinigung",
@@ -4669,20 +4750,20 @@ function Quick-CleanupAll {
         if ($result -ne "Yes") { return }
 
         Show-Progress -Text "Bereinige Testdaten..."
-        
-        $totalItems = $Global:CreatedGroups.Count + $Global:CreatedComputers.Count + 
-                     $Global:CreatedOUs.Count + $Global:CreatedServiceAccounts.Count
+
+        $totalItems = $script:CreatedGroups.Count + $script:CreatedComputers.Count +
+                     $script:CreatedOUs.Count + $script:CreatedServiceAccounts.Count + $script:CreatedPrinters.Count
         $currentItem = 0
         $successCount = 0
         $errorCount = 0
 
-        # Gruppen löschen (alle aus $Global:CreatedGroups)
-        if ($Global:CreatedGroups -and $Global:CreatedGroups.Count -gt 0) {
-            Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Gruppen..."
-            
+        # Gruppen löschen (alle aus $script:CreatedGroups)
+        if ($script:CreatedGroups -and $script:CreatedGroups.Count -gt 0) {
+            Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche Gruppen..."
+
             # Kopie erstellen, da wir während der Iteration löschen
-            $groupsToDelete = @($Global:CreatedGroups)
-            
+            $groupsToDelete = @($script:CreatedGroups)
+
             foreach ($group in $groupsToDelete) {
                 $currentItem++
                 try {
@@ -4690,26 +4771,26 @@ function Quick-CleanupAll {
                     $existingGroup = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $group)'" -ErrorAction SilentlyContinue
                     if ($existingGroup) {
                         Remove-ADGroup -Identity $existingGroup.DistinguishedName -Confirm:$false -ErrorAction Stop
-                        Write-Log "Gruppe '$group' gelöscht" -Level "SUCCESS"
+                        Write-AppLog "Gruppe '$group' gelöscht" -Level "SUCCESS"
                         $successCount++
                     } else {
-                        Write-Log "Gruppe '$group' existiert nicht mehr" -Level "DEBUG"
+                        Write-AppLog "Gruppe '$group' existiert nicht mehr" -Level "DEBUG"
                     }
-                    [void]$Global:CreatedGroups.Remove($group)
+                    [void]$script:CreatedGroups.Remove($group)
                 }
                 catch {
-                    Write-Log "Fehler beim Löschen von Gruppe '$group': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Löschen von Gruppe '$group': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
-                Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Gruppe: $group"
+                Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche Gruppe: $group"
             }
         }
 
         # Computer löschen
-        if ($Global:CreatedComputers -and $Global:CreatedComputers.Count -gt 0) {
-            Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Computer..."
-            
-            $computersToDelete = @($Global:CreatedComputers)
+        if ($script:CreatedComputers -and $script:CreatedComputers.Count -gt 0) {
+            Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche Computer..."
+
+            $computersToDelete = @($script:CreatedComputers)
             foreach ($computer in $computersToDelete) {
                 $currentItem++
                 try {
@@ -4717,195 +4798,219 @@ function Quick-CleanupAll {
                     if ($existingComputer) {
                         # Recursive: entfernt auch vom Tool angelegte BitLocker-Recovery-Unterobjekte
                         Remove-ADObject -Identity $existingComputer.DistinguishedName -Recursive -Confirm:$false -ErrorAction Stop
-                        Write-Log "Computer '$computer' gelöscht" -Level "SUCCESS"
+                        Write-AppLog "Computer '$computer' gelöscht" -Level "SUCCESS"
                         $successCount++
                     }
-                    [void]$Global:CreatedComputers.Remove($computer)
+                    [void]$script:CreatedComputers.Remove($computer)
                 }
                 catch {
-                    Write-Log "Fehler beim Löschen von Computer '$computer': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Löschen von Computer '$computer': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
-                Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Computer: $computer"
+                Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche Computer: $computer"
             }
         }
 
-        # Service-Accounts löschen
-        if ($Global:CreatedServiceAccounts -and $Global:CreatedServiceAccounts.Count -gt 0) {
-            Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Service-Accounts..."
-            
-            $serviceAccountsToDelete = @($Global:CreatedServiceAccounts)
+        # Dienstkonten löschen
+        if ($script:CreatedServiceAccounts -and $script:CreatedServiceAccounts.Count -gt 0) {
+            Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche Dienstkonten..."
+
+            $serviceAccountsToDelete = @($script:CreatedServiceAccounts)
             foreach ($serviceAccount in $serviceAccountsToDelete) {
                 $currentItem++
                 try {
                     $existingAccount = Get-ADUser -Filter "SamAccountName -eq '$(ConvertTo-ADFilterValue -Value $serviceAccount)'" -ErrorAction SilentlyContinue
                     if ($existingAccount) {
                         Remove-ADUser -Identity $existingAccount.DistinguishedName -Confirm:$false -ErrorAction Stop
-                        Write-Log "Service-Account '$serviceAccount' gelöscht" -Level "SUCCESS"
+                        Write-AppLog "Dienstkonto '$serviceAccount' gelöscht" -Level "SUCCESS"
                         $successCount++
                     }
-                    [void]$Global:CreatedServiceAccounts.Remove($serviceAccount)
+                    [void]$script:CreatedServiceAccounts.Remove($serviceAccount)
                 }
                 catch {
-                    Write-Log "Fehler beim Löschen von Service-Account '$serviceAccount': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Löschen von Dienstkonto '$serviceAccount': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
-                Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche Service-Account: $serviceAccount"
+                Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche Dienstkonto: $serviceAccount"
             }
         }
 
+        # Drucker löschen
+        foreach ($printerDn in @($script:CreatedPrinters)) {
+            $currentItem++
+            try {
+                Remove-ADObject -Identity $printerDn -Confirm:$false -ErrorAction Stop
+                Write-AppLog "Drucker '$printerDn' gelöscht" -Level "SUCCESS"
+                $successCount++
+                [void]$script:CreatedPrinters.Remove($printerDn)
+            }
+            catch {
+                if (Test-ADIdentityNotFound -ErrorRecord $_) {
+                    [void]$script:CreatedPrinters.Remove($printerDn)
+                } else {
+                    Write-AppLog "Fehler beim Löschen von Drucker '$printerDn': $($_.Exception.Message)" -Level "ERROR"
+                    $errorCount++
+                }
+            }
+            Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche Drucker"
+        }
+
         # OUs löschen (in umgekehrter Reihenfolge für Hierarchien)
-        if ($Global:CreatedOUs -and $Global:CreatedOUs.Count -gt 0) {
-            Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche OUs..."
-            
+        if ($script:CreatedOUs -and $script:CreatedOUs.Count -gt 0) {
+            Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche OUs..."
+
             # Sortiere OUs nach Tiefe (tiefste zuerst)
-            $ousToDelete = @(@($Global:CreatedOUs) | Sort-Object { ($_ -split ',').Count } -Descending)
-            
+            $ousToDelete = @(@($script:CreatedOUs) | Sort-Object { ($_ -split ',').Count } -Descending)
+
             foreach ($ou in $ousToDelete) {
                 $currentItem++
                 try {
                     # Prüfe ob es eine Test-OU ist (USERS, GROUPS, etc.)
                     $ouName = ($ou -split ',')[0] -replace 'OU=', ''
                     $isTestOU = $ouName -in @('USERS', 'GROUPS', 'COMPUTERS', 'SERVICES', 'RESOURCES', 'USER', 'COMPUTER', 'SERVICE', 'RESOURCE')
-                    
+
                     if (-not $isTestOU) {
                         # Bleibt in der Liste und kann über "OUs löschen" entfernt werden
-                        Write-Log "OU '$ou' ist keine Test-OU, überspringe..." -Level "DEBUG"
+                        Write-AppLog "OU '$ou' ist keine Test-OU, überspringe..." -Level "DEBUG"
                         continue
                     }
-                    
+
                     # Nur vom Tool erstellte OUs; bei Fremdobjekten wird explizit nachgefragt
                     $status = Remove-ToolCreatedOU -DistinguishedName $ou
                     if ($status -eq 'Deleted') {
-                        Write-Log "OU '$ou' gelöscht" -Level "SUCCESS"
+                        Write-AppLog "OU '$ou' gelöscht" -Level "SUCCESS"
                         $successCount++
                     }
                     if ($status -ne 'Skipped') {
-                        [void]$Global:CreatedOUs.Remove($ou)
+                        [void]$script:CreatedOUs.Remove($ou)
                     }
                 }
                 catch {
-                    Write-Log "Fehler beim Löschen von OU '$ou': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Löschen von OU '$ou': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
-                Update-Progress -Current $currentItem -Total $totalItems -Text "Lösche OU: $($ou -split ',' | Select-Object -First 1)"
+                Write-GuiProgress -Current $currentItem -Total $totalItems -Text "Lösche OU: $($ou -split ',' | Select-Object -First 1)"
             }
         }
 
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = @"
 Bereinigung abgeschlossen:
 
 Erfolgreich gelöscht: $successCount
 Fehler: $errorCount
 
-Hinweis: Benutzer wurden NICHT gelöscht.
-Diese können Sie über 'User löschen' entfernen.
+Hinweis: Benutzer wurden nicht einzeln gelöscht.
+Diese können Sie über '🗑️ Löschen' im Bereich 'Erstellte Benutzer verwalten' entfernen.
+OUs aus der OU-Struktur entfernen Sie über '🗑️ OUs'.
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "Bereinigung abgeschlossen", "OK", "Information")
 
     }
     catch {
-        Write-Log "Fehler bei Bereinigung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Bereinigung: $($_.Exception.Message)" -Level "ERROR"
         Hide-Progress
     }
 }
 
 #region Gruppen & Organisationsstruktur - Erweiterte Funktionen
 
-function Create-AutomaticGroups {
+function New-AutomaticGroup {
     <#
     .SYNOPSIS
     Erstellt automatisch Gruppen basierend auf Abteilungen, Standorten und Berufsbezeichnungen
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte automatische Gruppenerstellung..." -Level "INFO"
-        
-        $createDepartmentGroups = $Global:GuiControls.CheckBoxCreateDepartmentGroups.IsChecked
-        $createLocationGroups = $Global:GuiControls.CheckBoxCreateLocationGroups.IsChecked
-        $createJobTitleGroups = $Global:GuiControls.CheckBoxCreateJobTitleGroups.IsChecked
-        
+        Write-AppLog "Starte automatische Gruppenerstellung..." -Level "INFO"
+
+        $createDepartmentGroups = $script:GuiControls.CheckBoxCreateDepartmentGroups.IsChecked
+        $createLocationGroups = $script:GuiControls.CheckBoxCreateLocationGroups.IsChecked
+        $createJobTitleGroups = $script:GuiControls.CheckBoxCreateJobTitleGroups.IsChecked
+
         if (-not ($createDepartmentGroups -or $createLocationGroups -or $createJobTitleGroups)) {
-            Write-Log "Keine Gruppentypen für automatische Erstellung ausgewählt" -Level "WARN"
+            Write-AppLog "Keine Gruppentypen für automatische Erstellung ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens einen Gruppentyp aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
-        if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-            Write-Log "Keine Benutzer vorhanden, aus denen Gruppen erstellt werden können" -Level "WARN"
+
+        if (-not $script:CreatedUsers -or $script:CreatedUsers.Count -eq 0) {
+            Write-AppLog "Keine Benutzer vorhanden, aus denen Gruppen erstellt werden können" -Level "WARN"
             [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer erstellt. Gruppen werden basierend auf Benutzerattributen erstellt.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         # Bestimme Gruppen-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
+        $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
         if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
             $domain = Get-ADDomain
             $targetOU = $domain.DistinguishedName
         }
-        
+        if (-not $PSCmdlet.ShouldProcess($targetOU, "Automatische Gruppen erstellen")) { return }
+
         # Erstelle dedizierte Test-OUs wenn nötig
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
+        $testOUs = Initialize-TestOU -BaseOU $targetOU
         $groupOU = if ($testOUs["GROUPS"]) { $testOUs["GROUPS"] } else { $targetOU }
-        
+
         Show-Progress -Text "Analysiere Benutzerattribute..."
-        
+
         # Sammle Benutzer je Attributwert (einmalige AD-Abfrage pro Benutzer, keine erneuten Suchen pro Gruppe)
         $comparer = [System.StringComparer]::OrdinalIgnoreCase
         $usersByDepartment = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[string]]' ($comparer)
         $usersByLocation = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[string]]' ($comparer)
         $usersByJobTitle = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[string]]' ($comparer)
-        
+
         $addToIndex = {
             param($Index, [string]$Key, [string]$Sam)
             if ([string]::IsNullOrWhiteSpace($Key)) { return }
             if (-not $Index.ContainsKey($Key)) { $Index[$Key] = New-Object System.Collections.Generic.List[string] }
             $Index[$Key].Add($Sam)
         }
-        
+
         $userIndex = 0
-        $userTotal = $Global:CreatedUsers.Count
-        foreach ($userName in @($Global:CreatedUsers)) {
+        $userTotal = $script:CreatedUsers.Count
+        foreach ($userName in @($script:CreatedUsers)) {
             $userIndex++
             try {
                 $user = Get-ADUser -Identity $userName -Properties Department, City, Title -ErrorAction Stop
-                
+
                 if ($createDepartmentGroups) { & $addToIndex $usersByDepartment $user.Department $user.SamAccountName }
                 if ($createLocationGroups) { & $addToIndex $usersByLocation $user.City $user.SamAccountName }
                 if ($createJobTitleGroups) { & $addToIndex $usersByJobTitle $user.Title $user.SamAccountName }
             } catch {
-                Write-Log "Fehler beim Abrufen der Attribute für Benutzer '$userName': $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler beim Abrufen der Attribute für Benutzer '$userName': $($_.Exception.Message)" -Level "WARN"
             }
             if ($userIndex % 25 -eq 0) {
-                Update-Progress -Current $userIndex -Total $userTotal -Text "Analysiere Benutzerattribute ($userIndex/$userTotal)..."
+                Write-GuiProgress -Current $userIndex -Total $userTotal -Text "Analysiere Benutzerattribute"
             }
         }
-        
+
         # Einzigartige Werte extrahieren
         $uniqueDepartments = @($usersByDepartment.Keys)
         $uniqueLocations = @($usersByLocation.Keys)
         $uniqueJobTitles = @($usersByJobTitle.Keys)
-        
+
         # Gruppennamen von unzulässigen Zeichen bereinigen
         $toGroupName = { param([string]$Prefix, [string]$Value) "$Prefix$($Value -replace '[^\w\-\.]', '_')" }
-        
+
         $totalGroups = $uniqueDepartments.Count + $uniqueLocations.Count + $uniqueJobTitles.Count
         $currentGroup = 0
         $successCount = 0
         $errorCount = 0
-        
+
         # Erstelle Abteilungsgruppen
         if ($createDepartmentGroups) {
             foreach ($dept in $uniqueDepartments) {
                 $currentGroup++
-                Update-Progress -Current $currentGroup -Total $totalGroups -Text "Erstelle Abteilungsgruppe: $dept"
-                
+                Write-GuiProgress -Current $currentGroup -Total $totalGroups -Text "Erstelle Abteilungsgruppe: $dept"
+
                 $groupName = & $toGroupName "DEPT_" $dept
                 $groupDescription = "Abteilung: $dept"
-                
+
                 try {
                     # Prüfe ob Gruppe bereits existiert
                     $existingGroup = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $groupName)'" -ErrorAction SilentlyContinue
@@ -4916,41 +5021,41 @@ function Create-AutomaticGroups {
                             -Description $groupDescription `
                             -Path $groupOU `
                             -ErrorAction Stop
-                        
-                        $Global:CreatedGroups.Add($groupName)
-                        Write-Log "Abteilungsgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
-                        
+
+                        $script:CreatedGroups.Add($groupName)
+                        Write-AppLog "Abteilungsgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
+
                         # Füge Benutzer der Gruppe hinzu
                         $usersInDept = $usersByDepartment[$dept]
                         if ($usersInDept.Count -gt 0) {
                             try {
                                 Add-ADGroupMember -Identity $groupName -Members $usersInDept.ToArray() -ErrorAction Stop
-                                Write-Log "$($usersInDept.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
+                                Write-AppLog "$($usersInDept.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
                             } catch {
-                                Write-Log "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
+                                Write-AppLog "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
                             }
                         }
-                        
+
                         $successCount++
                     } else {
-                        Write-Log "Gruppe '$groupName' existiert bereits, übersprungen" -Level "INFO"
+                        Write-AppLog "Gruppe '$groupName' existiert bereits, übersprungen" -Level "INFO"
                     }
                 } catch {
-                    Write-Log "Fehler beim Erstellen der Abteilungsgruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Erstellen der Abteilungsgruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
             }
         }
-        
+
         # Erstelle Standortgruppen
         if ($createLocationGroups) {
             foreach ($location in $uniqueLocations) {
                 $currentGroup++
-                Update-Progress -Current $currentGroup -Total $totalGroups -Text "Erstelle Standortgruppe: $location"
-                
+                Write-GuiProgress -Current $currentGroup -Total $totalGroups -Text "Erstelle Standortgruppe: $location"
+
                 $groupName = & $toGroupName "LOC_" $location
                 $groupDescription = "Standort: $location"
-                
+
                 try {
                     $existingGroup = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $groupName)'" -ErrorAction SilentlyContinue
                     if (-not $existingGroup) {
@@ -4960,41 +5065,41 @@ function Create-AutomaticGroups {
                             -Description $groupDescription `
                             -Path $groupOU `
                             -ErrorAction Stop
-                        
-                        $Global:CreatedGroups.Add($groupName)
-                        Write-Log "Standortgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
-                        
+
+                        $script:CreatedGroups.Add($groupName)
+                        Write-AppLog "Standortgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
+
                         # Füge Benutzer der Gruppe hinzu
                         $usersInLocation = $usersByLocation[$location]
                         if ($usersInLocation.Count -gt 0) {
                             try {
                                 Add-ADGroupMember -Identity $groupName -Members $usersInLocation.ToArray() -ErrorAction Stop
-                                Write-Log "$($usersInLocation.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
+                                Write-AppLog "$($usersInLocation.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
                             } catch {
-                                Write-Log "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
+                                Write-AppLog "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
                             }
                         }
-                        
+
                         $successCount++
                     } else {
-                        Write-Log "Gruppe '$groupName' existiert bereits, übersprungen" -Level "INFO"
+                        Write-AppLog "Gruppe '$groupName' existiert bereits, übersprungen" -Level "INFO"
                     }
                 } catch {
-                    Write-Log "Fehler beim Erstellen der Standortgruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Erstellen der Standortgruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
             }
         }
-        
+
         # Erstelle Berufsbezeichnungsgruppen
         if ($createJobTitleGroups) {
             foreach ($title in $uniqueJobTitles) {
                 $currentGroup++
-                Update-Progress -Current $currentGroup -Total $totalGroups -Text "Erstelle Berufsgruppe: $title"
-                
+                Write-GuiProgress -Current $currentGroup -Total $totalGroups -Text "Erstelle Berufsgruppe: $title"
+
                 $groupName = & $toGroupName "JOB_" $title
                 $groupDescription = "Berufsbezeichnung: $title"
-                
+
                 try {
                     $existingGroup = Get-ADGroup -Filter "Name -eq '$(ConvertTo-ADFilterValue -Value $groupName)'" -ErrorAction SilentlyContinue
                     if (-not $existingGroup) {
@@ -5004,85 +5109,147 @@ function Create-AutomaticGroups {
                             -Description $groupDescription `
                             -Path $groupOU `
                             -ErrorAction Stop
-                        
-                        $Global:CreatedGroups.Add($groupName)
-                        Write-Log "Berufsgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
-                        
+
+                        $script:CreatedGroups.Add($groupName)
+                        Write-AppLog "Berufsgruppe '$groupName' erfolgreich erstellt" -Level "SUCCESS"
+
                         # Füge Benutzer der Gruppe hinzu
                         $usersWithTitle = $usersByJobTitle[$title]
                         if ($usersWithTitle.Count -gt 0) {
                             try {
                                 Add-ADGroupMember -Identity $groupName -Members $usersWithTitle.ToArray() -ErrorAction Stop
-                                Write-Log "$($usersWithTitle.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
+                                Write-AppLog "$($usersWithTitle.Count) Benutzer zu Gruppe '$groupName' hinzugefügt" -Level "DEBUG"
                             } catch {
-                                Write-Log "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
+                                Write-AppLog "Fehler beim Hinzufügen von Benutzern zu '$groupName': $($_.Exception.Message)" -Level "WARN"
                             }
                         }
-                        
+
                         $successCount++
                     } else {
-                        Write-Log "Gruppe '$groupName' existiert bereits, übersprungen" -Level "INFO"
+                        Write-AppLog "Gruppe '$groupName' existiert bereits, übersprungen" -Level "INFO"
                     }
                 } catch {
-                    Write-Log "Fehler beim Erstellen der Berufsgruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler beim Erstellen der Berufsgruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
             }
         }
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = "Automatische Gruppenerstellung abgeschlossen.`n`nErstellt: $successCount`nFehler: $errorCount`n`nDetails:`n"
         if ($createDepartmentGroups) { $message += "- $($uniqueDepartments.Count) Abteilungsgruppen`n" }
         if ($createLocationGroups) { $message += "- $($uniqueLocations.Count) Standortgruppen`n" }
         if ($createJobTitleGroups) { $message += "- $($uniqueJobTitles.Count) Berufsgruppen`n" }
-        
+
         [System.Windows.MessageBox]::Show($message, "Gruppen erstellt", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei automatischer Gruppenerstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei automatischer Gruppenerstellung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Gruppenerstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Create-NestedGroupStructure {
+function New-GroupHierarchyLevel {
+    <#
+    .SYNOPSIS
+    Erstellt rekursiv eine Ebene einer verschachtelten Gruppenhierarchie (Hashtable = weitere Ebene, Array = Blattgruppen)
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Structure,
+        [Parameter(Mandatory = $true)][string]$TargetOU,
+        [Parameter(Mandatory = $true)][string]$GroupCategory,
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [string]$ParentGroup,
+        [int]$Level = 1
+    )
+
+    foreach ($key in $Structure.Keys) {
+        # Universal kann Universal/Global enthalten, Global nur Global (gleiche Domäne)
+        $groupScope = if ($Level -le 2) { "Universal" } else { "Global" }
+        try {
+            if (-not $PSCmdlet.ShouldProcess($key, "Gruppe erstellen")) { continue }
+            New-ADGroup -Name $key -GroupScope $groupScope -GroupCategory $GroupCategory `
+                -Description "Hierarchie-Ebene $Level" -Path $TargetOU -ErrorAction Stop
+            $script:CreatedGroups.Add($key)
+            $State.SuccessCount++
+
+            if ($ParentGroup) {
+                Add-ADGroupMember -Identity $ParentGroup -Members $key -ErrorAction Stop
+                Write-AppLog "Gruppe '$key' erstellt und zu '$ParentGroup' hinzugefügt (Ebene $Level)" -Level "SUCCESS"
+            } else {
+                Write-AppLog "Stammgruppe '$key' erstellt (Ebene $Level)" -Level "SUCCESS"
+            }
+        } catch {
+            Write-AppLog "Fehler bei Gruppe '$key': $($_.Exception.Message)" -Level "ERROR"
+            $State.ErrorCount++
+            continue
+        }
+
+        $children = $Structure[$key]
+        if ($children -is [hashtable]) {
+            New-GroupHierarchyLevel -Structure $children -TargetOU $TargetOU -GroupCategory $GroupCategory -State $State -ParentGroup $key -Level ($Level + 1)
+        } else {
+            foreach ($leafGroup in @($children)) {
+                try {
+                    if (-not $PSCmdlet.ShouldProcess($leafGroup, "Gruppe erstellen")) { continue }
+                    New-ADGroup -Name $leafGroup -GroupScope Global -GroupCategory $GroupCategory `
+                        -Description "Hierarchie-Ebene $($Level + 1)" -Path $TargetOU -ErrorAction Stop
+                    $script:CreatedGroups.Add($leafGroup)
+                    Add-ADGroupMember -Identity $key -Members $leafGroup -ErrorAction Stop
+                    $State.SuccessCount++
+                    Write-AppLog "Gruppe '$leafGroup' erstellt und zu '$key' hinzugefügt (Ebene $($Level + 1))" -Level "SUCCESS"
+                } catch {
+                    Write-AppLog "Fehler bei Gruppe '$leafGroup': $($_.Exception.Message)" -Level "ERROR"
+                    $State.ErrorCount++
+                }
+            }
+        }
+    }
+}
+
+function New-NestedGroupStructure {
     <#
     .SYNOPSIS
     Erstellt verschachtelte Gruppenhierarchien basierend auf der ausgewählten Struktur
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     try {
-        Write-Log "Starte Erstellung verschachtelter Gruppenstruktur..." -Level "INFO"
-        
-        $selectedHierarchy = $Global:GuiControls.ComboBoxGroupHierarchy.SelectedItem
+        Write-AppLog "Starte Erstellung verschachtelter Gruppenstruktur..." -Level "INFO"
+
+        $selectedHierarchy = $script:GuiControls.ComboBoxGroupHierarchy.SelectedItem
         if (-not $selectedHierarchy) {
-            Write-Log "Keine Hierarchie ausgewählt" -Level "WARN"
+            Write-AppLog "Keine Hierarchie ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie eine Hierarchie-Struktur aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         $hierarchyType = $selectedHierarchy.Content
-        # Standard: Sicherheitsgruppen (CheckBox ist optional und in der aktuellen Oberfläche nicht vorhanden)
-        $nestSecurity = if ($null -ne $Global:GuiControls.CheckBoxNestedSecurity) { [bool]$Global:GuiControls.CheckBoxNestedSecurity.IsChecked } else { $true }
-        
+        $groupCategory = if ([bool]$script:GuiControls.CheckBoxNestedSecurity.IsChecked) { "Security" } else { "Distribution" }
+
         # Bestimme Gruppen-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
+        $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
         if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
             $domain = Get-ADDomain
             $targetOU = $domain.DistinguishedName
         }
-        
+
         # Erstelle dedizierte Test-OUs wenn nötig
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
+        $testOUs = Initialize-TestOU -BaseOU $targetOU
         $groupOU = if ($testOUs["GROUPS"]) { $testOUs["GROUPS"] } else { $targetOU }
-        
+
+        if (-not $PSCmdlet.ShouldProcess($groupOU, "Gruppenstruktur '$hierarchyType' erstellen")) { return }
+
         Show-Progress -Text "Erstelle verschachtelte Gruppenstruktur..."
-        
-        $createdGroups = @()
+
         $successCount = 0
         $errorCount = 0
-        
+
         switch ($hierarchyType) {
             "Flache Struktur" {
                 # Keine Verschachtelung, nur einfache Gruppen
@@ -5092,75 +5259,72 @@ function Create-NestedGroupStructure {
                         $groupName = "FLAT_$group"
                         New-ADGroup -Name $groupName `
                             -GroupScope Global `
-                            -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
+                            -GroupCategory $groupCategory `
                             -Description "Flache Struktur - $group" `
                             -Path $groupOU `
                             -ErrorAction Stop
-                        
-                        $Global:CreatedGroups.Add($groupName)
-                        $createdGroups += $groupName
+
+                        $script:CreatedGroups.Add($groupName)
                         $successCount++
-                        Write-Log "Gruppe '$groupName' erstellt" -Level "SUCCESS"
+                        Write-AppLog "Gruppe '$groupName' erstellt" -Level "SUCCESS"
                     } catch {
-                        Write-Log "Fehler beim Erstellen der Gruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
+                        Write-AppLog "Fehler beim Erstellen der Gruppe '$groupName': $($_.Exception.Message)" -Level "ERROR"
                         $errorCount++
                     }
                 }
             }
-            
-            "2-Level Hierarchie" {
+
+            "2-stufige Hierarchie" {
                 # Parent -> Child Struktur
                 $structure = @{
                     "ALL_USERS" = @("USERS_Standard", "USERS_Power", "USERS_Guest")
                     "ALL_ADMINS" = @("ADMINS_Local", "ADMINS_Domain", "ADMINS_Enterprise")
                 }
-                
+
                 foreach ($parent in $structure.Keys) {
                     try {
                         # Erstelle Parent-Gruppe
                         New-ADGroup -Name $parent `
                             -GroupScope Global `
-                            -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
-                            -Description "Parent-Gruppe" `
+                            -GroupCategory $groupCategory `
+                            -Description "Übergeordnete Gruppe" `
                             -Path $groupOU `
                             -ErrorAction Stop
-                        
-                        $Global:CreatedGroups.Add($parent)
-                        $createdGroups += $parent
-                        $successCount++
-                        Write-Log "Parent-Gruppe '$parent' erstellt" -Level "SUCCESS"
-                        
+
+                        $script:CreatedGroups.Add($parent)
+                                                $successCount++
+                        Write-AppLog "Parent-Gruppe '$parent' erstellt" -Level "SUCCESS"
+
                         # Erstelle Child-Gruppen
                         foreach ($child in $structure[$parent]) {
                             try {
                                 New-ADGroup -Name $child `
                                     -GroupScope Global `
-                                    -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
-                                    -Description "Child-Gruppe von $parent" `
+                                    -GroupCategory $groupCategory `
+                                    -Description "Untergruppe von $parent" `
                                     -Path $groupOU `
                                     -ErrorAction Stop
-                                
-                                $Global:CreatedGroups.Add($child)
-                                $createdGroups += $child
-                                
+
+                                $script:CreatedGroups.Add($child)
+
                                 # Füge Child zu Parent hinzu
                                 Add-ADGroupMember -Identity $parent -Members $child -ErrorAction Stop
-                                
+
                                 $successCount++
-                                Write-Log "Child-Gruppe '$child' erstellt und zu '$parent' hinzugefügt" -Level "SUCCESS"
+                                Write-AppLog "Child-Gruppe '$child' erstellt und zu '$parent' hinzugefügt" -Level "SUCCESS"
                             } catch {
-                                Write-Log "Fehler bei Child-Gruppe '$child': $($_.Exception.Message)" -Level "ERROR"
+                                Write-AppLog "Fehler bei Child-Gruppe '$child': $($_.Exception.Message)" -Level "ERROR"
                                 $errorCount++
                             }
                         }
                     } catch {
-                        Write-Log "Fehler bei Parent-Gruppe '$parent': $($_.Exception.Message)" -Level "ERROR"
+                        Write-AppLog "Fehler bei Parent-Gruppe '$parent': $($_.Exception.Message)" -Level "ERROR"
                         $errorCount++
                     }
                 }
             }
-            
-            "3-Level Hierarchie" {
+
+            "3-stufige Hierarchie" {
                 # Organisation -> Department -> Team Struktur
                 $structure = @{
                     "ORG_Company" = @{
@@ -5169,436 +5333,259 @@ function Create-NestedGroupStructure {
                         "DEPT_Finance" = @("TEAM_Accounting", "TEAM_Controlling", "TEAM_Treasury")
                     }
                 }
-                
+
                 foreach ($org in $structure.Keys) {
                     try {
                         # Level 1: Organisation
                         New-ADGroup -Name $org `
                             -GroupScope Universal `
-                            -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
-                            -Description "Organisation Level" `
+                            -GroupCategory $groupCategory `
+                            -Description "Organisationsebene" `
                             -Path $groupOU `
                             -ErrorAction Stop
-                        
-                        $Global:CreatedGroups.Add($org)
-                        $createdGroups += $org
-                        $successCount++
-                        Write-Log "Organisation '$org' erstellt" -Level "SUCCESS"
-                        
+
+                        $script:CreatedGroups.Add($org)
+                                                $successCount++
+                        Write-AppLog "Organisation '$org' erstellt" -Level "SUCCESS"
+
                         foreach ($dept in $structure[$org].Keys) {
                             try {
                                 # Level 2: Department
                                 New-ADGroup -Name $dept `
                                     -GroupScope Global `
-                                    -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
-                                    -Description "Department Level" `
+                                    -GroupCategory $groupCategory `
+                                    -Description "Abteilungsebene" `
                                     -Path $groupOU `
                                     -ErrorAction Stop
-                                
-                                $Global:CreatedGroups.Add($dept)
-                                $createdGroups += $dept
-                                Add-ADGroupMember -Identity $org -Members $dept -ErrorAction Stop
+
+                                $script:CreatedGroups.Add($dept)
+                                                                Add-ADGroupMember -Identity $org -Members $dept -ErrorAction Stop
                                 $successCount++
-                                Write-Log "Department '$dept' erstellt und zu '$org' hinzugefügt" -Level "SUCCESS"
-                                
+                                Write-AppLog "Department '$dept' erstellt und zu '$org' hinzugefügt" -Level "SUCCESS"
+
                                 foreach ($team in $structure[$org][$dept]) {
                                     try {
                                         # Level 3: Team
                                         # Global: eine DomainLocal-Gruppe kann nicht Mitglied einer Global-Gruppe sein
                                         New-ADGroup -Name $team `
                                             -GroupScope Global `
-                                            -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
-                                            -Description "Team Level" `
+                                            -GroupCategory $groupCategory `
+                                            -Description "Teamebene" `
                                             -Path $groupOU `
                                             -ErrorAction Stop
-                                        
-                                        $Global:CreatedGroups.Add($team)
-                                        $createdGroups += $team
-                                        Add-ADGroupMember -Identity $dept -Members $team -ErrorAction Stop
+
+                                        $script:CreatedGroups.Add($team)
+                                                                                Add-ADGroupMember -Identity $dept -Members $team -ErrorAction Stop
                                         $successCount++
-                                        Write-Log "Team '$team' erstellt und zu '$dept' hinzugefügt" -Level "SUCCESS"
+                                        Write-AppLog "Team '$team' erstellt und zu '$dept' hinzugefügt" -Level "SUCCESS"
                                     } catch {
-                                        Write-Log "Fehler bei Team '$team': $($_.Exception.Message)" -Level "ERROR"
+                                        Write-AppLog "Fehler bei Team '$team': $($_.Exception.Message)" -Level "ERROR"
                                         $errorCount++
                                     }
                                 }
                             } catch {
-                                Write-Log "Fehler bei Department '$dept': $($_.Exception.Message)" -Level "ERROR"
+                                Write-AppLog "Fehler bei Department '$dept': $($_.Exception.Message)" -Level "ERROR"
                                 $errorCount++
                             }
                         }
                     } catch {
-                        Write-Log "Fehler bei Organisation '$org': $($_.Exception.Message)" -Level "ERROR"
+                        Write-AppLog "Fehler bei Organisation '$org': $($_.Exception.Message)" -Level "ERROR"
                         $errorCount++
                     }
                 }
             }
-            
+
             "Vollständige Hierarchie" {
-                # Komplexe mehrstufige Hierarchie
-                # Region -> Country -> City -> Department -> Team
+                # Fünfstufige Hierarchie: Region -> Land -> Stadt -> Abteilung -> Team (Präfix FULL_ vermeidet Namenskonflikte)
                 $structure = @{
-                    "REGION_EMEA" = @{
-                        "COUNTRY_Germany" = @{
-                            "CITY_Berlin" = @{
-                                "DEPT_Sales" = @("TEAM_Inside", "TEAM_Field")
-                                "DEPT_Tech" = @("TEAM_Dev", "TEAM_QA")
+                    "FULL_REGION_EMEA" = @{
+                        "FULL_COUNTRY_Germany" = @{
+                            "FULL_CITY_Berlin" = @{
+                                "FULL_DEPT_Sales" = @("FULL_TEAM_Inside", "FULL_TEAM_Field")
+                                "FULL_DEPT_Tech" = @("FULL_TEAM_Dev", "FULL_TEAM_QA")
                             }
-                            "CITY_Munich" = @{
-                                "DEPT_RnD" = @("TEAM_Research", "TEAM_Innovation")
-                            }
-                        }
-                        "COUNTRY_UK" = @{
-                            "CITY_London" = @{
-                                "DEPT_Finance" = @("TEAM_Audit", "TEAM_Tax")
+                            "FULL_CITY_Munich" = @{
+                                "FULL_DEPT_RnD" = @("FULL_TEAM_Research", "FULL_TEAM_Innovation")
                             }
                         }
-                    }
-                }
-                
-                # Rekursive Funktion für tiefe Hierarchien
-                function Create-HierarchyLevel {
-                    param($Structure, $ParentGroup = $null, $Level = 1, $TargetOU)
-                    
-                    foreach ($key in $Structure.Keys) {
-                        try {
-                            # Korrigierte Group Scope Hierarchie
-                            # Universal kann Universal und Global enthalten, Global kann Global enthalten
-                            $groupScope = switch ($Level) {
-                                1 { "Universal" }  # Höchste Ebene
-                                2 { "Universal" }  # Kann Universal enthalten
-                                3 { "Global" }     # Kann Global enthalten
-                                4 { "Global" }     # Kann Global/DomainLocal enthalten
-                                default { "Global" } # Verwende Global statt DomainLocal für Verschachtelung
+                        "FULL_COUNTRY_UK" = @{
+                            "FULL_CITY_London" = @{
+                                "FULL_DEPT_Finance" = @("FULL_TEAM_Audit", "FULL_TEAM_Tax")
                             }
-                            
-                            New-ADGroup -Name $key `
-                                -GroupScope $groupScope `
-                                -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
-                                -Description "Level $Level Hierarchy" `
-                                -Path $TargetOU `
-                                -ErrorAction Stop
-                            
-                            $Global:CreatedGroups.Add($key)
-                            $Script:createdGroups += $key
-                            $Script:successCount++
-                            
-                            if ($ParentGroup) {
-                                Add-ADGroupMember -Identity $ParentGroup -Members $key -ErrorAction Stop
-                                Write-Log "Gruppe '$key' erstellt und zu '$ParentGroup' hinzugefügt (Level $Level)" -Level "SUCCESS"
-                            } else {
-                                Write-Log "Root-Gruppe '$key' erstellt (Level $Level)" -Level "SUCCESS"
-                            }
-                            
-                            # Rekursiv für Untergruppen
-                            if ($Structure[$key] -is [hashtable]) {
-                                Create-HierarchyLevel -Structure $Structure[$key] -ParentGroup $key -Level ($Level + 1) -TargetOU $TargetOU
-                            } elseif ($Structure[$key] -is [array]) {
-                                foreach ($subGroup in $Structure[$key]) {
-                                    try {
-                                        # Für Blatt-Ebene (Teams) verwende Global statt DomainLocal
-                                        # DomainLocal nur wenn explizit keine Verschachtelung gewünscht
-                                        $leafScope = if ($Level -ge 4) { "Global" } else { "Global" }
-                                        
-                                        New-ADGroup -Name $subGroup `
-                                            -GroupScope $leafScope `
-                                            -GroupCategory $(if ($nestSecurity) { "Security" } else { "Distribution" }) `
-                                            -Description "Level $($Level + 1) Hierarchy" `
-                                            -Path $TargetOU `
-                                            -ErrorAction Stop
-                                        
-                                        $Global:CreatedGroups.Add($subGroup)
-                                        $Script:createdGroups += $subGroup
-                                        Add-ADGroupMember -Identity $key -Members $subGroup -ErrorAction Stop
-                                        $Script:successCount++
-                                        Write-Log "Gruppe '$subGroup' erstellt und zu '$key' hinzugefügt (Level $($Level + 1))" -Level "SUCCESS"
-                                    } catch {
-                                        Write-Log "Fehler bei Gruppe '$subGroup': $($_.Exception.Message)" -Level "ERROR"
-                                        $Script:errorCount++
-                                    }
-                                }
-                            }
-                        } catch {
-                            Write-Log "Fehler bei Gruppe '$key': $($_.Exception.Message)" -Level "ERROR"
-                            $Script:errorCount++
                         }
                     }
                 }
-                
-                $Script:createdGroups = $createdGroups
-                $Script:successCount = $successCount
-                $Script:errorCount = $errorCount
-                
-                Create-HierarchyLevel -Structure $structure -TargetOU $groupOU
-                
-                $createdGroups = $Script:createdGroups
-                $successCount = $Script:successCount
-                $errorCount = $Script:errorCount
+
+                $hierarchyState = @{ SuccessCount = 0; ErrorCount = 0 }
+                New-GroupHierarchyLevel -Structure $structure -TargetOU $groupOU -GroupCategory $groupCategory -State $hierarchyState
+                $successCount += $hierarchyState.SuccessCount
+                $errorCount += $hierarchyState.ErrorCount
             }
         }
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = "Verschachtelte Gruppenstruktur erstellt:`n`nTyp: $hierarchyType`nErstellt: $successCount Gruppen`nFehler: $errorCount"
         [System.Windows.MessageBox]::Show($message, "Struktur erstellt", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei verschachtelter Gruppenstruktur: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei verschachtelter Gruppenstruktur: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Create-DynamicSecurityGroups {
+function Measure-OUStructureNode {
     <#
     .SYNOPSIS
-    Erstellt dynamische Sicherheitsgruppen mit LDAP-Filtern (simuliert, da AD keine echten dynamischen Gruppen unterstützt)
+    Zählt die OUs einer OU-Strukturvorlage (Hashtable = OU mit Unter-OUs, Array = Blatt-OUs)
     #>
-    try {
-        Write-Log "Starte Erstellung dynamischer Sicherheitsgruppen..." -Level "INFO"
-        
-        $ldapFilter = $Global:GuiControls.TextBoxGroupFilter.Text
-        if ([string]::IsNullOrWhiteSpace($ldapFilter)) {
-            Write-Log "Kein LDAP-Filter angegeben" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie einen LDAP-Filter ein.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        # Validiere LDAP-Filter Syntax
-        try {
-            $testUsers = Get-ADUser -LDAPFilter $ldapFilter -ResultSetSize 1 -ErrorAction Stop
-            Write-Log "LDAP-Filter validiert: $ldapFilter" -Level "DEBUG"
-        } catch {
-            Write-Log "Ungültiger LDAP-Filter: $ldapFilter - $($_.Exception.Message)" -Level "ERROR"
-            [System.Windows.MessageBox]::Show("Der angegebene LDAP-Filter ist ungültig:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
-            return
-        }
-        
-        # Bestimme Gruppen-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
-        if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
-            $domain = Get-ADDomain
-            $targetOU = $domain.DistinguishedName
-        }
-        
-        # Erstelle dedizierte Test-OUs wenn nötig
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
-        $groupOU = if ($testOUs["GROUPS"]) { $testOUs["GROUPS"] } else { $targetOU }
-        
-        Show-Progress -Text "Erstelle dynamische Gruppe..."
-        
-        # Generiere Gruppennamen basierend auf Filter
-        $groupName = "DYN_" + ($ldapFilter -replace '[^\w]', '' -replace '^(.{1,20}).*', '$1')
-        $groupDescription = "Dynamische Gruppe mit Filter: $ldapFilter"
-        
-        try {
-            # Erstelle die Gruppe
-            New-ADGroup -Name $groupName `
-                -GroupScope Global `
-                -GroupCategory Security `
-                -Description $groupDescription `
-                -Path $groupOU `
-                -OtherAttributes @{info="LDAP-Filter: $ldapFilter"} `
-                -ErrorAction Stop
-            
-            $Global:CreatedGroups.Add($groupName)
-            Write-Log "Dynamische Gruppe '$groupName' erstellt" -Level "SUCCESS"
-            
-            Update-Progress -Current 50 -Total 100 -Text "Füge Mitglieder hinzu..."
-            
-            # Finde alle Benutzer, die dem Filter entsprechen
-            $matchingUsers = Get-ADUser -LDAPFilter $ldapFilter -ErrorAction Stop
-            $userCount = 0
-            $errorCount = 0
-            
-            foreach ($user in $matchingUsers) {
-                try {
-                    Add-ADGroupMember -Identity $groupName -Members $user -ErrorAction Stop
-                    $userCount++
-                    Write-Log "Benutzer '$($user.SamAccountName)' zu dynamischer Gruppe hinzugefügt" -Level "DEBUG"
-                } catch {
-                    Write-Log "Fehler beim Hinzufügen von '$($user.SamAccountName)': $($_.Exception.Message)" -Level "WARN"
-                    $errorCount++
-                }
-            }
-            
-            # Erstelle ein Scheduled Task Skript für regelmäßige Updates (als Beispiel)
-            $updateScript = @"
-# Automatisches Update-Skript für dynamische Gruppe: $groupName
-# Dieses Skript sollte als geplante Aufgabe ausgeführt werden
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object]$Structure)
 
-`$ldapFilter = "$ldapFilter"
-`$groupName = "$groupName"
-
-try {
-    # Aktuelle Mitglieder abrufen
-    `$currentMembers = Get-ADGroupMember -Identity `$groupName | Select-Object -ExpandProperty SamAccountName
-    
-    # Benutzer finden, die dem Filter entsprechen
-    `$shouldBeMembers = Get-ADUser -LDAPFilter `$ldapFilter | Select-Object -ExpandProperty SamAccountName
-    
-    # Zu entfernende Mitglieder
-    `$toRemove = `$currentMembers | Where-Object { `$_ -notin `$shouldBeMembers }
-    if (`$toRemove) {
-        Remove-ADGroupMember -Identity `$groupName -Members `$toRemove -Confirm:`$false
+    if ($Structure -is [hashtable]) {
+        $count = 0
+        foreach ($key in $Structure.Keys) { $count += 1 + (Measure-OUStructureNode -Structure $Structure[$key]) }
+        return $count
     }
-    
-    # Hinzuzufügende Mitglieder
-    `$toAdd = `$shouldBeMembers | Where-Object { `$_ -notin `$currentMembers }
-    if (`$toAdd) {
-        Add-ADGroupMember -Identity `$groupName -Members `$toAdd
-    }
-    
-    Write-EventLog -LogName Application -Source "AD Dynamic Groups" -EventId 1000 -Message "Dynamische Gruppe '$groupName' aktualisiert. Hinzugefügt: `$(`$toAdd.Count), Entfernt: `$(`$toRemove.Count)"
-} catch {
-    Write-EventLog -LogName Application -Source "AD Dynamic Groups" -EventId 1001 -EntryType Error -Message "Fehler beim Update der dynamischen Gruppe '$groupName': `$_"
-}
-"@
-            
-            $scriptPath = (Get-ExportFilePath -FileName "DynamicGroup_$groupName`_Update.ps1")
-            $updateScript | Out-File -FilePath $scriptPath -Encoding UTF8
-            Write-Log "Update-Skript erstellt: $scriptPath" -Level "INFO"
-            
-            Hide-Progress
-            Update-Statistics
-            
-            $message = @"
-Dynamische Gruppe erfolgreich erstellt:
-
-Gruppenname: $groupName
-LDAP-Filter: $ldapFilter
-Mitglieder hinzugefügt: $userCount
-Fehler: $errorCount
-
-Ein Update-Skript wurde erstellt: $scriptPath
-Dieses kann als geplante Aufgabe eingerichtet werden, um die Gruppenmitgliedschaft automatisch zu aktualisieren.
-"@
-            
-            [System.Windows.MessageBox]::Show($message, "Dynamische Gruppe erstellt", "OK", "Information")
-            
-        } catch {
-            Write-Log "Fehler beim Erstellen der dynamischen Gruppe: $($_.Exception.Message)" -Level "ERROR"
-            throw
-        }
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei dynamischer Gruppenerstellung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
-    }
+    return @($Structure).Count
 }
 
-function Create-OrganizationalUnitStructure {
+function New-OUStructureLevel {
     <#
     .SYNOPSIS
-    Erstellt eine komplette OU-Struktur basierend auf Firmengröße
+    Erstellt rekursiv eine Ebene einer OU-Strukturvorlage (ohne Löschschutz, damit die Bereinigung funktioniert)
     #>
-    try {
-        Write-Log "Starte OU-Struktur-Erstellung..." -Level "INFO"
-        
-        $selectedStructure = $Global:GuiControls.ComboBoxOUStructure.SelectedItem
-        if (-not $selectedStructure) {
-            Write-Log "Keine OU-Struktur ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie eine Firmenstruktur aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        $structureType = $selectedStructure.Content
-        $createGPOs = $Global:GuiControls.CheckBoxCreateGPOStructure.IsChecked
-        
-        # Basis-OU ermitteln
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
-        if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
-            # Wenn Standard-OU oder leer, verwende Domänen-Root
-            $domain = Get-ADDomain
-            $targetOU = $domain.DistinguishedName
-            Write-Log "Verwende Domänen-Root als Basis-OU: $targetOU" -Level "INFO"
-        }
-        
-        # Validiere Basis-OU
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object]$Structure,
+        [Parameter(Mandatory = $true)][string]$ParentPath,
+        [Parameter(Mandatory = $true)][string]$StructureType,
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [int]$Level = 1
+    )
+
+    $ouNames = if ($Structure -is [hashtable]) { @($Structure.Keys) } else { @($Structure) }
+    foreach ($ouName in $ouNames) {
+        $ouPath = "OU=$ouName,$ParentPath"
+        $State.Processed++
+        Write-GuiProgress -Current $State.Processed -Total $State.Total -Text "Erstelle OU-Struktur"
         try {
-            if ($targetOU -like "OU=*") {
-                Get-ADOrganizationalUnit -Identity $targetOU -ErrorAction Stop | Out-Null
+            $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $ouPath)'" -ErrorAction SilentlyContinue
+            if ($existingOU) {
+                Write-AppLog "OU '$ouPath' existiert bereits und wird nicht erneut angelegt" -Level "INFO"
+                $State.ExistingCount++
+            } elseif ($PSCmdlet.ShouldProcess($ouPath, "OU erstellen")) {
+                New-ADOrganizationalUnit -Name $ouName -Path $ParentPath -Description "Ebene $Level - $StructureType" `
+                    -ProtectedFromAccidentalDeletion $false -ErrorAction Stop
+                $script:CreatedOUs.Add($ouPath)
+                $State.Created.Add($ouPath)
+                Write-AppLog "OU '$ouName' unter '$ParentPath' erstellt" -Level "SUCCESS"
             } else {
-                Get-ADObject -Identity $targetOU -ErrorAction Stop | Out-Null
+                continue
             }
-            Write-Log "Basis-OU validiert: $targetOU" -Level "DEBUG"
         } catch {
-            Write-Log "Basis-OU ungültig oder nicht gefunden: $targetOU" -Level "ERROR"
-            [System.Windows.MessageBox]::Show("Die angegebene Basis-OU ist ungültig:`n$targetOU`n`nBitte wählen Sie eine gültige OU aus dem Dropdown.", "OU-Fehler", "OK", "Error")
-            return
+            Write-AppLog "Fehler bei OU '$ouPath': $($_.Exception.Message)" -Level "ERROR"
+            $State.ErrorCount++
+            continue
         }
-        
-        Show-Progress -Text "Erstelle OU-Struktur..."
-        
-        $createdOUs = @()
-        $successCount = 0
-        $errorCount = 0
-        
-        # OU-Strukturen nach Firmengröße
-        $ouStructures = @{
-            "Kleine Firma (unter 50 MA)" = @{
-                "CompanyName" = @{
-                    "Users" = @("Management", "Employees")
-                    "Computers" = @("Workstations", "Laptops")
-                    "Groups" = @()
-                    "Resources" = @()
+
+        if ($Structure -is [hashtable] -and @($Structure[$ouName]).Count -gt 0) {
+            New-OUStructureLevel -Structure $Structure[$ouName] -ParentPath $ouPath -StructureType $StructureType -State $State -Level ($Level + 1)
+        }
+    }
+}
+
+function New-OUStructure {
+    <#
+    .SYNOPSIS
+    Erstellt eine OU-Struktur nach Firmengröße unterhalb der Ziel-OU
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Starte OU-Struktur-Erstellung..." -Level "INFO"
+
+    $selectedStructure = $script:GuiControls.ComboBoxOUStructure.SelectedItem
+    if (-not $selectedStructure) {
+        Write-AppLog "Keine OU-Struktur ausgewählt" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte wählen Sie eine Firmenstruktur aus.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+    $structureType = [string]$selectedStructure.Content
+
+    $targetOU = ([string]$script:GuiControls.ComboBoxTargetOU.Text).Trim()
+    if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
+        Write-AppLog "Keine gültige Ziel-OU ausgewählt" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte wählen Sie eine gültige Ziel-OU aus (z. B. über 'Test-Umgebung erstellen').", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+    if (-not (Test-TargetOU -TargetOU $targetOU)) { return }
+
+    # Firmenname als Wurzel-OU (Zeichen mit Sonderbedeutung im DN werden entfernt)
+    $companyOU = (([string]$script:GuiControls.TextBoxCompanyName.Text) -replace '[,+"\\<>;=#/]', '').Trim()
+    if (-not $companyOU) { $companyOU = "TestCompany" }
+
+    $ouStructures = @{
+        "Kleine Firma (unter 50 MA)" = @{
+            $companyOU = @{
+                "Users" = @("Management", "Employees")
+                "Computers" = @("Workstations", "Laptops")
+                "Groups" = @()
+                "Resources" = @()
+            }
+        }
+        "Mittlere Firma (50-500 MA)" = @{
+            $companyOU = @{
+                "Departments" = @{
+                    "IT" = @("Users", "Computers", "Service Accounts")
+                    "HR" = @("Users", "Resources")
+                    "Finance" = @("Users", "Resources")
+                    "Sales" = @("Users", "Computers")
+                }
+                "Infrastructure" = @{
+                    "Servers" = @("Application", "Database", "Web")
+                    "Network" = @("Devices", "Printers")
+                }
+                "Security Groups" = @("Department Groups", "Resource Groups", "Role Groups")
+            }
+        }
+        "Große Firma (500+ MA)" = @{
+            $companyOU = @{
+                "Business Units" = @{
+                    "Corporate" = @{
+                        "Executive" = @("Users", "Computers")
+                        "IT" = @{
+                            "Development" = @("Users", "Computers", "Test Accounts")
+                            "Operations" = @("Users", "Computers", "Service Accounts")
+                            "Security" = @("Users", "Computers", "Privileged Accounts")
+                        }
+                        "Finance" = @("Users", "Computers", "Resources")
+                    }
+                    "Production" = @{
+                        "Manufacturing" = @("Users", "Computers", "Service Accounts")
+                        "Quality" = @("Users", "Computers")
+                        "Logistics" = @("Users", "Computers")
+                    }
+                    "Sales & Marketing" = @{
+                        "Sales" = @("Inside Sales", "Field Sales", "Partners")
+                        "Marketing" = @("Digital", "Events", "Content")
+                    }
+                }
+                "Infrastructure" = @{
+                    "Tier 0" = @("Domain Controllers", "PKI", "ADFS")
+                    "Tier 1" = @("Servers", "Management", "Backup")
+                    "Tier 2" = @("Workstations", "Kiosks", "Mobile")
+                }
+                "Security" = @{
+                    "Groups" = @("Global", "Domain Local", "Universal")
+                    "Service Accounts" = @("Tier 0", "Tier 1", "Tier 2")
+                    "Privileged" = @("Admin Accounts", "Service Accounts")
                 }
             }
-            
-            "Mittlere Firma (50-500 MA)" = @{
-                "CompanyName" = @{
-                    "Departments" = @{
-                        "IT" = @("Users", "Computers", "Service Accounts")
-                        "HR" = @("Users", "Resources")
-                        "Finance" = @("Users", "Resources")
-                        "Sales" = @("Users", "Computers")
-                    }
-                    "Infrastructure" = @{
-                        "Servers" = @("Application", "Database", "Web")
-                        "Network" = @("Devices", "Printers")
-                    }
-                    "Security Groups" = @("Department Groups", "Resource Groups", "Role Groups")
-                }
-            }
-            
-            "Große Firma (500+ MA)" = @{
-                "CompanyName" = @{
-                    "Business Units" = @{
-                        "Corporate" = @{
-                            "Executive" = @("Users", "Computers")
-                            "IT" = @{
-                                "Development" = @("Users", "Computers", "Test Accounts")
-                                "Operations" = @("Users", "Computers", "Service Accounts")
-                                "Security" = @("Users", "Computers", "Privileged Accounts")
-                            }
-                            "Finance" = @("Users", "Computers", "Resources")
-                        }
-                        "Production" = @{
-                            "Manufacturing" = @("Users", "Computers", "Service Accounts")
-                            "Quality" = @("Users", "Computers")
-                            "Logistics" = @("Users", "Computers")
-                        }
-                        "Sales & Marketing" = @{
-                            "Sales" = @("Inside Sales", "Field Sales", "Partners")
-                            "Marketing" = @("Digital", "Events", "Content")
-                        }
-                    }
-                    "Infrastructure" = @{
-                        "Tier 0" = @("Domain Controllers", "PKI", "ADFS")
-                        "Tier 1" = @("Servers", "Management", "Backup")
-                        "Tier 2" = @("Workstations", "Kiosks", "Mobile")
-                    }
-                    "Security" = @{
-                        "Groups" = @("Global", "Domain Local", "Universal")
-                        "Service Accounts" = @("Tier 0", "Tier 1", "Tier 2")
-                        "Privileged" = @("Admin Accounts", "Service Accounts")
-                    }
-                }
-            }
-            
-            "Konzern (Multi-Standort)" = @{
+        }
+        "Konzern (Multi-Standort)" = @{
+            $companyOU = @{
                 "Global" = @{
                     "EMEA" = @{
                         "Germany" = @{
@@ -5639,244 +5626,138 @@ function Create-OrganizationalUnitStructure {
                 }
             }
         }
-        
-        # Rekursive Funktion zum Erstellen der OU-Struktur
-        function Create-OURecursive {
-            param(
-                $Structure,
-                $ParentPath,
-                $Level = 0
-            )
-            
-            foreach ($ouName in $Structure.Keys) {
-                try {
-                    $ouPath = "OU=$ouName,$ParentPath"
-                    
-                    # Prüfe ob OU bereits existiert
-                    $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $ouPath)'" -ErrorAction SilentlyContinue
-                    
-                    if (-not $existingOU) {
-                        New-ADOrganizationalUnit -Name $ouName `
-                            -Path $ParentPath `
-                            -Description "Level $Level - $structureType" `
-                            -ProtectedFromAccidentalDeletion $true `
-                            -ErrorAction Stop
-                        
-                        $Global:CreatedOUs.Add($ouPath)
-                        $Script:createdOUs += $ouPath
-                        $Script:successCount++
-                        Write-Log "OU '$ouName' erstellt unter '$ParentPath'" -Level "SUCCESS"
-                        
-                        # GPO-Verknüpfung wenn gewünscht
-                        if ($createGPOs -and $Level -le 2) {
-                            try {
-                                $gpoName = "GPO_$($ouName -replace '\s', '_')"
-                                # Hinweis: New-GPO benötigt GroupPolicy-Modul
-                                # Dies ist nur ein Platzhalter - in einer realen Umgebung würde man hier GPOs erstellen
-                                Write-Log "GPO '$gpoName' würde hier erstellt und verknüpft (benötigt GroupPolicy-Modul)" -Level "INFO"
-                            } catch {
-                                Write-Log "GPO-Erstellung übersprungen: $($_.Exception.Message)" -Level "WARN"
-                            }
-                        }
-                    } else {
-                        Write-Log "OU '$ouName' existiert bereits, übersprungen" -Level "INFO"
-                    }
-                    
-                    # Rekursiv für Unter-OUs
-                    if ($Structure[$ouName] -is [hashtable]) {
-                        Create-OURecursive -Structure $Structure[$ouName] -ParentPath $ouPath -Level ($Level + 1)
-                    } elseif ($Structure[$ouName] -is [array]) {
-                        foreach ($subOU in $Structure[$ouName]) {
-                            try {
-                                $subOUPath = "OU=$subOU,$ouPath"
-                                $existingSubOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$(ConvertTo-ADFilterValue -Value $subOUPath)'" -ErrorAction SilentlyContinue
-                                
-                                if (-not $existingSubOU) {
-                                    New-ADOrganizationalUnit -Name $subOU `
-                                        -Path $ouPath `
-                                        -Description "Level $($Level + 1) - $structureType" `
-                                        -ProtectedFromAccidentalDeletion $true `
-                                        -ErrorAction Stop
-                                    
-                                    $Global:CreatedOUs.Add($subOUPath)
-                                    $Script:createdOUs += $subOUPath
-                                    $Script:successCount++
-                                    Write-Log "OU '$subOU' erstellt unter '$ouPath'" -Level "SUCCESS"
-                                }
-                            } catch {
-                                Write-Log "Fehler bei OU '$subOU': $($_.Exception.Message)" -Level "ERROR"
-                                $Script:errorCount++
-                            }
-                        }
-                    }
-                } catch {
-                    Write-Log "Fehler bei OU '$ouName': $($_.Exception.Message)" -Level "ERROR"
-                    $Script:errorCount++
-                }
-            }
-        }
-        
-        # Initialisiere Script-Variablen für rekursive Funktion
-        $Script:createdOUs = $createdOUs
-        $Script:successCount = $successCount
-        $Script:errorCount = $errorCount
-        
-        # Erstelle die Struktur
-        $selectedStructure = $ouStructures[$structureType]
-        Create-OURecursive -Structure $selectedStructure -ParentPath $targetOU
-        
-        # Übernehme Ergebnisse
-        $createdOUs = $Script:createdOUs
-        $successCount = $Script:successCount
-        $errorCount = $Script:errorCount
-        
-        # Erstelle Standard-Gruppen in den neuen OUs
-        if ($createGPOs) {
-            Update-Progress -Current 90 -Total 100 -Text "Erstelle Standard-Gruppen..."
-            
-            # Beispiel: Erstelle Admin-Gruppen für jede Haupt-OU
-            foreach ($ou in $createdOUs | Where-Object { $_ -match "OU=\w+,$targetOU$" }) {
-                try {
-                    $ouName = ($ou -split ',')[0] -replace 'OU=', ''
-                    $adminGroupName = "OU_${ouName}_Admins"
-                    
-                    New-ADGroup -Name $adminGroupName `
-                        -Path $ou `
-                        -GroupScope DomainLocal `
-                        -GroupCategory Security `
-                        -Description "Administratoren für $ouName" `
-                        -ErrorAction Stop
-                    
-                    $Global:CreatedGroups.Add($adminGroupName)
-                    Write-Log "Admin-Gruppe '$adminGroupName' für OU erstellt" -Level "DEBUG"
-                } catch {
-                    Write-Log "Fehler beim Erstellen der Admin-Gruppe: $($_.Exception.Message)" -Level "WARN"
-                }
-            }
-        }
-        
-        Hide-Progress
-        Update-Statistics
-        
-        # Erstelle Dokumentation
-        $docPath = (Get-ExportFilePath -FileName "OU_Structure_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
-        $documentation = @"
-OU-Struktur Dokumentation
-========================
-Erstellt am: $(Get-Date)
-Struktur-Typ: $structureType
-Basis-OU: $targetOU
-GPOs erstellt: $(if ($createGPOs) { "Ja" } else { "Nein" })
-
-Erstellte OUs ($($createdOUs.Count)):
-$($createdOUs | ForEach-Object { "- $_" } | Out-String)
-
-Zusammenfassung:
-- Erfolgreich erstellt: $successCount
-- Fehler: $errorCount
-"@
-        
-        $documentation | Out-File -FilePath $docPath -Encoding UTF8
-        
-        $message = @"
-OU-Struktur erfolgreich erstellt:
-
-Typ: $structureType
-Erstellt: $successCount OUs
-Fehler: $errorCount
-GPO-Verknüpfungen: $(if ($createGPOs) { "Aktiviert" } else { "Nicht aktiviert" })
-
-Dokumentation gespeichert unter:
-$docPath
-"@
-        
-        [System.Windows.MessageBox]::Show($message, "OU-Struktur erstellt", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei OU-Struktur-Erstellung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
+
+    $structure = $ouStructures[$structureType]
+    if (-not $structure) {
+        Write-AppLog "Unbekannte OU-Strukturvorlage: '$structureType'" -Level "ERROR"
+        [System.Windows.MessageBox]::Show("Unbekannte Strukturvorlage: $structureType", "Fehler", "OK", "Error") | Out-Null
+        return
+    }
+
+    $state = @{
+        Created = New-Object System.Collections.Generic.List[string]
+        ExistingCount = 0
+        ErrorCount = 0
+        Processed = 0
+        Total = (Measure-OUStructureNode -Structure $structure)
+    }
+
+    $result = [System.Windows.MessageBox]::Show(
+        "Soll die OU-Struktur '$structureType' ($($state.Total) OUs) unterhalb von`n$targetOU`nerstellt werden?`n`nWurzel-OU: $companyOU",
+        "OU-Struktur erstellen",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess($targetOU, "OU-Struktur '$structureType' erstellen")) { return }
+
+    Show-Progress -Text "Erstelle OU-Struktur..."
+    New-OUStructureLevel -Structure $structure -ParentPath $targetOU -StructureType $structureType -State $state
+    Hide-Progress
+    Show-CreatedObjectCount
+
+    $docPath = Get-ExportFilePath -FileName "OU_Structure_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+    $documentation = @"
+OU-Struktur Dokumentation
+=========================
+Erstellt am: $(Get-Date)
+Strukturvorlage: $structureType
+Basis-OU: $targetOU
+
+Erstellte OUs ($($state.Created.Count)):
+$($state.Created | ForEach-Object { "- $_" } | Out-String)
+Bereits vorhanden: $($state.ExistingCount)
+Fehler: $($state.ErrorCount)
+"@
+    $documentation | Out-File -FilePath $docPath -Encoding UTF8
+
+    Write-AppLog "OU-Struktur '$structureType': $($state.Created.Count) erstellt, $($state.ExistingCount) vorhanden, $($state.ErrorCount) Fehler" -Level "INFO"
+    [System.Windows.MessageBox]::Show(
+        "OU-Struktur erstellt.`n`nVorlage: $structureType`nErstellt: $($state.Created.Count)`nBereits vorhanden: $($state.ExistingCount)`nFehler: $($state.ErrorCount)`n`nDokumentation:`n$docPath",
+        "OU-Struktur erstellt", "OK", "Information") | Out-Null
 }
 
-function Create-ComputerObjects {
+function New-TestComputer {
     <#
     .SYNOPSIS
     Erstellt Computer-Objekte in Active Directory
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Computer-Erstellung..." -Level "INFO"
-        
-        $computerCount = $Global:GuiControls.TextBoxComputerCount.Text
-        $computerType = $Global:GuiControls.ComboBoxComputerType.SelectedItem
-        $randomNames = $Global:GuiControls.CheckBoxRandomComputerNames.IsChecked
-        
+        Write-AppLog "Starte Computer-Erstellung..." -Level "INFO"
+
+        $computerCount = $script:GuiControls.TextBoxComputerCount.Text
+        $computerType = $script:GuiControls.ComboBoxComputerType.SelectedItem
+        $randomNames = $script:GuiControls.CheckBoxRandomComputerNames.IsChecked
+
         if ([string]::IsNullOrWhiteSpace($computerCount)) {
             $computerCount = 10 # Default
         } else {
             $computerCount = ConvertTo-IntOrZero -Value $computerCount
         }
-        
+
         if ($computerCount -le 0) {
-            Write-Log "Ungültige Anzahl Computer" -Level "WARN"
+            Write-AppLog "Ungültige Anzahl Computer" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Computern an.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         if (-not $computerType) {
-            Write-Log "Kein Computer-Typ ausgewählt" -Level "WARN"
+            Write-AppLog "Kein Computer-Typ ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie einen Computer-Typ aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         $type = $computerType.Content
-        
+
         # Bestimme Ziel-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
+        $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
         if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
             $domain = Get-ADDomain
             $targetOU = $domain.DistinguishedName
         }
-        
-        # Erstelle Test-OUs wenn nötig
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
-        $computerOU = if ($testOUs["COMPUTERS"]) { $testOUs["COMPUTERS"] } else { $targetOU }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie $computerCount Computer vom Typ '$type' erstellen?`n`n" +
-            "Ziel-OU: $computerOU`n" +
+            "Ziel: Test-OU 'COMPUTERS' unterhalb von $targetOU`n" +
             "Zufällige Namen: $(if ($randomNames) { 'Ja' } else { 'Nein' })",
             "Computer erstellen",
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+        if (-not $PSCmdlet.ShouldProcess($targetOU, "$computerCount Computer erstellen")) { return }
+        # Erstelle Test-OUs wenn nötig
+        $testOUs = Initialize-TestOU -BaseOU $targetOU
+        $computerOU = if ($testOUs["COMPUTERS"]) { $testOUs["COMPUTERS"] } else { $targetOU }
+
         Show-Progress -Text "Erstelle Computer..."
         $successCount = 0
         $errorCount = 0
-        
+
         # Computer-Präfixe basierend auf Typ
         $prefix = switch ($type) {
-            "Workstations" { "WS" }
-            "Laptops" { "LT" }
+            "Arbeitsplatzrechner" { "WS" }
+            "Notebooks" { "LT" }
             "Server" { "SRV" }
-            "Virtual Machines" { "VM" }
+            "Virtuelle Maschinen" { "VM" }
             default { "PC" }
         }
-        
+
         # Betriebssystem basierend auf Typ
         $operatingSystem = switch ($type) {
             "Server" { "Windows Server 2022 Datacenter" }
-            "Virtual Machines" { "Windows Server 2022 Standard" }
+            "Virtuelle Maschinen" { "Windows Server 2022 Standard" }
             default { "Windows 11 Enterprise" }
         }
-        
+
         # Standorte für zufällige Namen
         $locations = @("BER", "MUC", "HAM", "FRA", "STG", "DUS", "CGN")
         $departments = @("IT", "HR", "FIN", "MKT", "OPS", "DEV", "SUP")
-        
+
         for ($i = 1; $i -le $computerCount; $i++) {
             try {
                 # Generiere Computer-Namen
@@ -5892,7 +5773,7 @@ function Create-ComputerObjects {
                 if ($computerName.Length -gt 15) {
                     $computerName = "$prefix-$loc$dept$num"
                 }
-                
+
                 # Erstelle Computer
                 $computerParams = @{
                     Name = $computerName
@@ -5901,32 +5782,32 @@ function Create-ComputerObjects {
                     Enabled = $true
                     OperatingSystem = $operatingSystem
                     OperatingSystemVersion = "10.0 (22621)"
-                    Description = "$type - Created $(Get-Date -Format 'yyyy-MM-dd')"
-                    Location = if ($randomNames) { $locations | Get-Random } else { "Main Office" }
+                    Description = "$type - erstellt am $(Get-Date -Format 'yyyy-MM-dd')"
+                    Location = if ($randomNames) { $locations | Get-Random } else { "Hauptstandort" }
                 }
-                
+
                 # Zusätzliche Attribute für Server
                 if ($type -eq "Server") {
                     $computerParams.OperatingSystemServicePack = "21H2"
                     $computerParams.DNSHostName = "$computerName.$((Get-CachedADDomain).DNSRoot)"
                 }
-                
+
                 New-ADComputer @computerParams -ErrorAction Stop
-                $Global:CreatedComputers.Add($computerName)
-                Write-Log "Computer '$computerName' erfolgreich erstellt" -Level "SUCCESS"
+                $script:CreatedComputers.Add($computerName)
+                Write-AppLog "Computer '$computerName' erfolgreich erstellt" -Level "SUCCESS"
                 $successCount++
-                
+
             } catch {
-                Write-Log "Fehler beim Erstellen von Computer: $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Erstellen von Computer: $($_.Exception.Message)" -Level "ERROR"
                 $errorCount++
             }
-            
-            Update-Progress -Current $i -Total $computerCount -Text "Erstelle Computer $i von $computerCount..."
+
+            Write-GuiProgress -Current $i -Total $computerCount -Text "Erstelle Computer"
         }
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = @"
 Computer-Erstellung abgeschlossen:
 
@@ -5935,111 +5816,113 @@ Erstellt: $successCount
 Fehler: $errorCount
 Ziel-OU: $computerOU
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "Computer erstellt", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei Computer-Erstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Computer-Erstellung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Create-ServiceAccounts {
+function New-TestServiceAccount {
     <#
     .SYNOPSIS
-    Erstellt Service-Account Benutzer in Active Directory
+    Erstellt Dienstkonten (Benutzerkonten mit SPNs) in Active Directory
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Service-Account-Erstellung..." -Level "INFO"
-        
-        $serviceType = $Global:GuiControls.ComboBoxServiceType.SelectedItem
-        $accountCount = $Global:GuiControls.TextBoxServiceAccountCount.Text
-        
+        Write-AppLog "Starte Dienstkonto-Erstellung..." -Level "INFO"
+
+        $serviceType = $script:GuiControls.ComboBoxServiceType.SelectedItem
+        $accountCount = $script:GuiControls.TextBoxServiceAccountCount.Text
+
         if (-not $serviceType) {
-            Write-Log "Kein Service-Typ ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie einen Service-Typ aus.", "Hinweis", "OK", "Warning")
+            Write-AppLog "Kein Dienst-Typ ausgewählt" -Level "WARN"
+            [System.Windows.MessageBox]::Show("Bitte wählen Sie einen Dienst-Typ aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         if ([string]::IsNullOrWhiteSpace($accountCount)) {
             $accountCount = 5 # Default
         } else {
             $parsedCount = 0
             $accountCount = if ([int]::TryParse(([string]$accountCount).Trim(), [ref]$parsedCount)) { $parsedCount } else { 0 }
         }
-        
+
         if ($accountCount -le 0) {
-            Write-Log "Ungültige Anzahl Service-Accounts" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Service-Accounts an.", "Hinweis", "OK", "Warning")
+            Write-AppLog "Ungültige Anzahl Dienstkonten" -Level "WARN"
+            [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Dienstkonten an.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         $type = $serviceType.Content
-        
+
         # Bestimme Ziel-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
+        $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
         if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
             $domain = Get-ADDomain
             $targetOU = $domain.DistinguishedName
         }
-        
-        # Erstelle Test-OUs wenn nötig
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
-        $serviceOU = if ($testOUs["SERVICES"]) { $testOUs["SERVICES"] } else { $targetOU }
-        
+
         $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie $accountCount Service-Accounts für '$type' erstellen?`n`n" +
-            "Ziel-OU: $serviceOU",
-            "Service-Accounts erstellen",
+            "Möchten Sie $accountCount Dienstkonten für '$type' erstellen?`n`n" +
+            "Ziel: Test-OU 'SERVICES' unterhalb von $targetOU",
+            "Dienstkonten erstellen",
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
-        Show-Progress -Text "Erstelle Service-Accounts..."
+        if (-not $PSCmdlet.ShouldProcess($targetOU, "$accountCount Dienstkonten erstellen")) { return }
+        # Erstelle Test-OUs wenn nötig
+        $testOUs = Initialize-TestOU -BaseOU $targetOU
+        $serviceOU = if ($testOUs["SERVICES"]) { $testOUs["SERVICES"] } else { $targetOU }
+
+        Show-Progress -Text "Erstelle Dienstkonten..."
         $successCount = 0
         $errorCount = 0
-        
-        # Service-Account Präfixe und Eigenschaften
+
+        # Dienstkonto-Präfixe und Eigenschaften
         $serviceConfig = @{
-            "SQL Server Service" = @{
+            "SQL-Server-Dienst" = @{
                 Prefix = "svc_sql"
-                Description = "SQL Server Service Account"
+                Description = "SQL-Server-Dienstkonto"
                 SPNs = @("MSSQLSvc/")
             }
-            "IIS Application Pool" = @{
+            "IIS-Anwendungspool" = @{
                 Prefix = "svc_iis"
-                Description = "IIS Application Pool Identity"
+                Description = "Identität eines IIS-Anwendungspools"
                 SPNs = @("HTTP/")
             }
-            "Windows Service" = @{
+            "Windows-Dienst" = @{
                 Prefix = "svc_win"
-                Description = "Windows Service Account"
+                Description = "Windows-Dienstkonto"
                 SPNs = @()
             }
-            "Scheduled Task" = @{
+            "Geplante Aufgabe" = @{
                 Prefix = "svc_task"
-                Description = "Scheduled Task Service Account"
+                Description = "Dienstkonto für geplante Aufgaben"
                 SPNs = @()
             }
-            "Custom Application" = @{
+            "Eigene Anwendung" = @{
                 Prefix = "svc_app"
-                Description = "Custom Application Service Account"
+                Description = "Dienstkonto für eine eigene Anwendung"
                 SPNs = @()
             }
         }
-        
+
         $config = $serviceConfig[$type]
         $domain = (Get-CachedADDomain).DNSRoot
-        
+
         for ($i = 1; $i -le $accountCount; $i++) {
             try {
-                # Generiere Service-Account Namen
+                # Generiere Dienstkonto-Namen
                 $accountName = "$($config.Prefix)_$(Get-Random -Minimum 1000 -Maximum 9999)"
-                
-                # Erstelle Service-Account
+
+                # Erstelle Dienstkonto
                 $serviceParams = @{
                     Name = $accountName
                     SamAccountName = $accountName
@@ -6048,11 +5931,11 @@ function Create-ServiceAccounts {
                     Enabled = $true
                     PasswordNeverExpires = $true
                     CannotChangePassword = $true
-                    Description = "$($config.Description) - Created $(Get-Date -Format 'yyyy-MM-dd')"
-                    DisplayName = "$type Service Account $i"
-                    AccountPassword = (New-RandomSecurePassword -Complexity "Hochsicher (20+ Zeichen)")
+                    Description = "$($config.Description) - erstellt am $(Get-Date -Format 'yyyy-MM-dd')"
+                    DisplayName = "Dienstkonto $type $i"
+                    AccountPassword = (Get-RandomSecurePassword -Complexity "Hochsicher (20+ Zeichen)")
                 }
-                
+
                 # Füge SPNs hinzu wenn vorhanden (Hostname je Account eindeutig, um doppelte SPNs zu vermeiden)
                 if ($config.SPNs.Count -gt 0) {
                     $spns = New-Object System.Collections.Generic.List[string]
@@ -6068,229 +5951,290 @@ function Create-ServiceAccounts {
                     }
                     $serviceParams.ServicePrincipalNames = $spns.ToArray()
                 }
-                
+
                 New-ADUser @serviceParams -ErrorAction Stop
-                $Global:CreatedServiceAccounts.Add($accountName)
-                Write-Log "Service-Account '$accountName' erfolgreich erstellt" -Level "SUCCESS"
+                $script:CreatedServiceAccounts.Add($accountName)
+                Write-AppLog "Dienstkonto '$accountName' erfolgreich erstellt" -Level "SUCCESS"
                 $successCount++
-                
+
             } catch {
-                Write-Log "Fehler beim Erstellen von Service-Account: $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Erstellen von Dienstkonto: $($_.Exception.Message)" -Level "ERROR"
                 $errorCount++
             }
-            
-            Update-Progress -Current $i -Total $accountCount -Text "Erstelle Service-Account $i von $accountCount..."
+
+            Write-GuiProgress -Current $i -Total $accountCount -Text "Erstelle Dienstkonten"
         }
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = @"
-Service-Account-Erstellung abgeschlossen:
+Dienstkonto-Erstellung abgeschlossen:
 
 Typ: $type
 Erstellt: $successCount
 Fehler: $errorCount
 Ziel-OU: $serviceOU
 
-Hinweis: Alle Service-Accounts haben:
+Hinweis: Alle Dienstkonten haben:
 - Passwort läuft nie ab
 - Benutzer kann Passwort nicht ändern
 - Hochsichere Passwörter (20+ Zeichen)
 "@
-        
-        [System.Windows.MessageBox]::Show($message, "Service-Accounts erstellt", "OK", "Information")
-        
+
+        [System.Windows.MessageBox]::Show($message, "Dienstkonten erstellt", "OK", "Information")
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei Service-Account-Erstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Dienstkonto-Erstellung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Create-PrinterObjects {
+function New-TestPrinter {
     <#
     .SYNOPSIS
-    Erstellt Drucker-Objekte in Active Directory
+    Erstellt veröffentlichte Drucker (printQueue-Objekte) in der Test-OU RESOURCES
+
+    .DESCRIPTION
+    Es werden nur AD-Objekte angelegt, keine echten Druckwarteschlangen. Server und IP-Adressen sind fiktiv
+    (Dokumentations-Adressbereich 192.0.2.0/24). Die DistinguishedNames werden in $script:CreatedPrinters
+    nachverfolgt und können über 'Drucker löschen' bzw. 'Alles löschen' entfernt werden.
     #>
-    try {
-        Write-Log "Starte Drucker-Erstellung..." -Level "INFO"
-        
-        $printerCount = $Global:GuiControls.TextBoxPrinterCount.Text
-        $printerType = $Global:GuiControls.ComboBoxPrinterType.SelectedItem
-        
-        if ([string]::IsNullOrWhiteSpace($printerCount)) {
-            $printerCount = 3 # Default
-        } else {
-            $printerCount = ConvertTo-IntOrZero -Value $printerCount
-        }
-        
-        if ($printerCount -le 0) {
-            Write-Log "Ungültige Anzahl Drucker" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Druckern an.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        if (-not $printerType) {
-            Write-Log "Kein Drucker-Typ ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie einen Drucker-Typ aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        $type = $printerType.Content
-        
-        # Bestimme Ziel-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
-        if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
-            $domain = Get-ADDomain
-            $targetOU = $domain.DistinguishedName
-        }
-        
-        # Erstelle Test-OUs wenn nötig
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
-        $resourceOU = if ($testOUs["RESOURCES"]) { $testOUs["RESOURCES"] } else { $targetOU }
-        
-        $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie $printerCount Drucker vom Typ '$type' erstellen?`n`n" +
-            "Ziel-OU: $resourceOU`n`n" +
-            "Hinweis: Dies erstellt printQueue-Objekte in AD.",
-            "Drucker erstellen",
-            "YesNo",
-            "Question"
-        )
-        
-        if ($result -ne "Yes") { return }
-        
-        Show-Progress -Text "Erstelle Drucker..."
-        $successCount = 0
-        $errorCount = 0
-        
-        # Drucker-Hersteller und Modelle
-        $manufacturers = @{
-            "HP" = @("LaserJet Pro M404dn", "Color LaserJet Pro M454dw", "OfficeJet Pro 9015e")
-            "Canon" = @("imageCLASS MF445dw", "PIXMA TR8620", "imageRUNNER ADVANCE C5560i")
-            "Brother" = @("HL-L2350DW", "MFC-L2750DW", "HL-L8360CDW")
-            "Epson" = @("WorkForce Pro WF-4830", "EcoTank ET-4760", "SureColor P700")
-            "Xerox" = @("VersaLink C405", "WorkCentre 6515", "Phaser 6510")
-        }
-        
-        # Standorte
-        $locations = @(
-            "1st Floor - Reception",
-            "2nd Floor - Sales",
-            "3rd Floor - IT Department",
-            "4th Floor - Management",
-            "Ground Floor - Copy Room",
-            "Warehouse - Shipping",
-            "Conference Room A",
-            "Conference Room B"
-        )
-        
-        for ($i = 1; $i -le $printerCount; $i++) {
-            try {
-                # Wähle zufälligen Hersteller und Modell
-                $manufacturer = $manufacturers.Keys | Get-Random
-                $model = $manufacturers[$manufacturer] | Get-Random
-                $location = $locations | Get-Random
-                
-                # Generiere Drucker-Namen
-                $printerName = switch ($type) {
-                    "Netzwerkdrucker" { "PRN-NET-$('{0:D3}' -f $i)" }
-                    "Lokale Drucker" { "PRN-LOC-$('{0:D3}' -f $i)" }
-                    "Multifunktionsgeräte" { "PRN-MFP-$('{0:D3}' -f $i)" }
-                }
-                
-                # Erstelle printQueue-Objekt
-                $printerAttributes = @{
-                    'printShareName' = $printerName
-                    'printerName' = "$manufacturer $model"
-                    'serverName' = "\\PRINTSERVER01"
-                    'uNCName' = "\\PRINTSERVER01\$printerName"
-                    'location' = $location
-                    'description' = "$type - $manufacturer $model"
-                    'driverName' = "$manufacturer Universal Print Driver"
-                    'driverVersion' = "6.3.0.$(Get-Random -Minimum 1000 -Maximum 9999)"
-                    'printColor' = if ($model -like "*Color*") { "TRUE" } else { "FALSE" }
-                    'printDuplexSupported' = "TRUE"
-                    'printStaplingSupported' = if ($type -eq "Multifunktionsgeräte") { "TRUE" } else { "FALSE" }
-                    'printMaxResolutionSupported' = if ($manufacturer -eq "Epson") { "2400" } else { "1200" }
-                    'portName' = "IP_192.168.1.$(Get-Random -Minimum 100 -Maximum 254)"
-                }
-                
-                New-ADObject -Name $printerName `
-                    -Type 'printQueue' `
-                    -Path $resourceOU `
-                    -OtherAttributes $printerAttributes `
-                    -ErrorAction Stop
-                
-                Write-Log "Drucker '$printerName' erfolgreich erstellt" -Level "SUCCESS"
-                $successCount++
-                
-            } catch {
-                Write-Log "Fehler beim Erstellen von Drucker: $($_.Exception.Message)" -Level "ERROR"
-                $errorCount++
-            }
-            
-            Update-Progress -Current $i -Total $printerCount -Text "Erstelle Drucker $i von $printerCount..."
-        }
-        
-        Hide-Progress
-        
-        $message = @"
-Drucker-Erstellung abgeschlossen:
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
 
-Typ: $type
-Erstellt: $successCount
-Fehler: $errorCount
-Ziel-OU: $resourceOU
+    Write-AppLog "Starte Drucker-Erstellung..." -Level "INFO"
 
-Die Drucker wurden als printQueue-Objekte in AD erstellt.
-Sie können in der AD-Verwaltung unter der Resources-OU gefunden werden.
-"@
-        
-        [System.Windows.MessageBox]::Show($message, "Drucker erstellt", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei Drucker-Erstellung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
+    $printerCountText = [string]$script:GuiControls.TextBoxPrinterCount.Text
+    $printerCount = if ([string]::IsNullOrWhiteSpace($printerCountText)) { 5 } else { ConvertTo-IntOrZero -Value $printerCountText }
+    if ($printerCount -lt 1 -or $printerCount -gt 200) {
+        Write-AppLog "Ungültige Anzahl Drucker: '$printerCountText'" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte geben Sie eine Anzahl zwischen 1 und 200 an.", "Hinweis", "OK", "Warning") | Out-Null
+        return
     }
+
+    $printerType = $script:GuiControls.ComboBoxPrinterType.SelectedItem
+    if (-not $printerType) {
+        Write-AppLog "Kein Drucker-Typ ausgewählt" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte wählen Sie einen Drucker-Typ aus.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+    $type = [string]$printerType.Content
+    $typeCode = switch ($type) {
+        "Netzwerkdrucker" { "NET" }
+        "Lokale Drucker" { "LOC" }
+        "Multifunktionsgeräte" { "MFP" }
+        default { "PRN" }
+    }
+
+    $targetOU = ([string]$script:GuiControls.ComboBoxTargetOU.Text).Trim()
+    if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
+        $targetOU = (Get-CachedADDomain).DistinguishedName
+    }
+
+    $result = [System.Windows.MessageBox]::Show(
+        "Möchten Sie $printerCount Drucker vom Typ '$type' erstellen?`n`n" +
+        "Ziel: Test-OU 'RESOURCES' unterhalb von $targetOU`n`n" +
+        "Hinweis: Es werden nur printQueue-Objekte in AD angelegt (fiktiver Druckserver).",
+        "Drucker erstellen",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess($targetOU, "$printerCount Drucker-Objekte erstellen")) { return }
+
+    Show-Progress -Text "Erstelle Drucker..."
+    $testOUs = Initialize-TestOU -BaseOU $targetOU
+    $resourceOU = if ($testOUs["RESOURCES"]) { $testOUs["RESOURCES"] } else { $targetOU }
+
+    $domainDns = (Get-CachedADDomain).DNSRoot
+    $printServer = "TEST-PRN01"
+    $printServerFqdn = "$printServer.$domainDns"
+
+    $manufacturers = @{
+        "HP" = @("LaserJet Pro M404dn", "Color LaserJet Pro M454dw", "OfficeJet Pro 9015e")
+        "Canon" = @("imageCLASS MF445dw", "PIXMA TR8620", "imageRUNNER ADVANCE C5560i")
+        "Brother" = @("HL-L2350DW", "MFC-L2750DW", "HL-L8360CDW")
+        "Epson" = @("WorkForce Pro WF-4830", "EcoTank ET-4760", "SureColor P700")
+        "Xerox" = @("VersaLink C405", "WorkCentre 6515", "Phaser 6510")
+    }
+    $locations = @(
+        "EG - Empfang",
+        "EG - Kopierraum",
+        "1. OG - Vertrieb",
+        "2. OG - IT-Abteilung",
+        "3. OG - Geschäftsleitung",
+        "Lager - Versand",
+        "Besprechungsraum A",
+        "Besprechungsraum B"
+    )
+
+    $successCount = 0
+    $errorCount = 0
+    $usedNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+    for ($i = 1; $i -le $printerCount; $i++) {
+        Write-GuiProgress -Current $i -Total $printerCount -Text "Erstelle Drucker"
+        try {
+            # Eindeutigen Namen ermitteln (im Lauf und in der Ziel-OU)
+            $printerName = $null
+            for ($attempt = 0; $attempt -lt 20 -and -not $printerName; $attempt++) {
+                $candidate = "PRN-$typeCode-$(Get-Random -Minimum 1000 -Maximum 10000)"
+                if ($usedNames.Contains($candidate)) { continue }
+                $existing = Get-ADObject -Filter "Name -eq '$candidate'" -SearchBase $resourceOU -SearchScope OneLevel -ErrorAction SilentlyContinue
+                if (-not $existing) { $printerName = $candidate }
+            }
+            if (-not $printerName) { throw "Kein freier Druckername gefunden." }
+            [void]$usedNames.Add($printerName)
+
+            $manufacturer = @($manufacturers.Keys) | Get-Random
+            $model = $manufacturers[$manufacturer] | Get-Random
+            $isColor = $model -like "*Color*" -or $model -like "*PIXMA*" -or $model -like "*EcoTank*" -or $model -like "*SureColor*" -or $model -like "*VersaLink*"
+
+            # Pflichtattribute der Klasse printQueue: printerName, serverName, shortServerName, uNCName, versionNumber
+            $printerAttributes = @{
+                'printerName' = "$printerName ($manufacturer $model)"
+                'serverName' = $printServerFqdn
+                'shortServerName' = $printServer
+                'uNCName' = "\\$printServerFqdn\$printerName"
+                'versionNumber' = [int]4
+                'printShareName' = $printerName
+                'location' = $locations | Get-Random
+                'description' = "$type - $manufacturer $model (Testobjekt)"
+                'driverName' = "$manufacturer Universal Print Driver"
+                'driverVersion' = [int]4
+                'printColor' = [bool]$isColor
+                'printDuplexSupported' = $true
+                'printStaplingSupported' = [bool]($typeCode -eq "MFP")
+                'printMaxResolutionSupported' = [int]$(if ($manufacturer -eq "Epson") { 2400 } else { 1200 })
+                'portName' = [string[]]@("IP_192.0.2.$(Get-Random -Minimum 10 -Maximum 250)")
+            }
+
+            $printer = New-ADObject -Name $printerName -Type 'printQueue' -Path $resourceOU `
+                -OtherAttributes $printerAttributes -PassThru -ErrorAction Stop
+            $script:CreatedPrinters.Add([string]$printer.DistinguishedName)
+            Write-AppLog "Drucker '$printerName' erstellt" -Level "SUCCESS"
+            $successCount++
+        } catch {
+            Write-AppLog "Fehler beim Erstellen eines Druckers: $($_.Exception.Message)" -Level "ERROR"
+            $errorCount++
+        }
+    }
+
+    Hide-Progress
+    Show-CreatedObjectCount
+    Write-AppLog "Drucker erstellt: $successCount erfolgreich, $errorCount Fehler" -Level "INFO"
+    [System.Windows.MessageBox]::Show(
+        "Drucker-Erstellung abgeschlossen.`n`nTyp: $type`nErstellt: $successCount`nFehler: $errorCount`nZiel-OU: $resourceOU",
+        "Drucker erstellt", "OK", "Information") | Out-Null
 }
 
-function Create-ComputerBitLockerData {
+function Remove-CreatedPrinter {
+    <#
+    .SYNOPSIS
+    Löscht alle vom Tool erstellten Drucker-Objekte (printQueue)
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Starte Löschung aller erstellten Drucker..." -Level "INFO"
+
+    if ($script:CreatedPrinters.Count -eq 0) {
+        Write-AppLog "Keine Drucker zum Löschen vorhanden" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Es wurden in dieser Sitzung noch keine Drucker erstellt.", "Hinweis", "OK", "Information") | Out-Null
+        return
+    }
+
+    $result = [System.Windows.MessageBox]::Show(
+        "Möchten Sie wirklich ALLE $($script:CreatedPrinters.Count) erstellten Drucker-Objekte löschen?`n`nDiese Aktion kann nicht rückgängig gemacht werden!",
+        "Drucker löschen", "YesNo", "Warning")
+    if ($result -ne "Yes") {
+        Write-AppLog "Drucker-Löschung abgebrochen" -Level "INFO"
+        return
+    }
+    if (-not $PSCmdlet.ShouldProcess("$($script:CreatedPrinters.Count) Drucker-Objekte", "Löschen")) { return }
+
+    $outcome = Remove-CreatedPrinterObject
+    Show-CreatedObjectCount
+    [System.Windows.MessageBox]::Show("Drucker-Löschung abgeschlossen.`n`nGelöscht: $($outcome.Deleted)`nFehler: $($outcome.Failed)", "Abgeschlossen", "OK", "Information") | Out-Null
+}
+
+function Remove-CreatedPrinterObject {
+    <#
+    .SYNOPSIS
+    Löscht die nachverfolgten printQueue-Objekte ohne Rückfrage (für 'Drucker löschen' und 'Alles löschen')
+    .OUTPUTS
+    Objekt mit den Zählern Deleted und Failed
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    $deleted = 0
+    $failed = 0
+    $printersToDelete = @($script:CreatedPrinters)
+
+    Show-Progress -Text "Lösche Drucker..."
+    for ($i = 0; $i -lt $printersToDelete.Count; $i++) {
+        $printerDn = $printersToDelete[$i]
+        Write-GuiProgress -Current ($i + 1) -Total $printersToDelete.Count -Text "Lösche Drucker"
+        if (-not $PSCmdlet.ShouldProcess($printerDn, "Drucker-Objekt löschen")) { continue }
+        try {
+            Remove-ADObject -Identity $printerDn -Confirm:$false -ErrorAction Stop
+            Write-AppLog "Drucker '$printerDn' gelöscht" -Level "SUCCESS"
+            [void]$script:CreatedPrinters.Remove($printerDn)
+            $deleted++
+        } catch {
+            if (Test-ADIdentityNotFound -ErrorRecord $_) {
+                Write-AppLog "Drucker '$printerDn' existiert nicht mehr" -Level "INFO"
+                [void]$script:CreatedPrinters.Remove($printerDn)
+            } else {
+                Write-AppLog "Fehler beim Löschen des Druckers '$printerDn': $($_.Exception.Message)" -Level "ERROR"
+                $failed++
+            }
+        }
+    }
+    Hide-Progress
+
+    return [PSCustomObject]@{ Deleted = $deleted; Failed = $failed }
+}
+
+function New-ComputerBitLockerData {
     <#
     .SYNOPSIS
     Erstellt BitLocker Recovery Keys für ausgewählte Computer
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte BitLocker-Datenerstellung für Computer..." -Level "INFO"
-        
-        if (-not $Global:CreatedComputers -or $Global:CreatedComputers.Count -eq 0) {
-            Write-Log "Keine Computer für BitLocker-Daten vorhanden" -Level "WARN"
+        Write-AppLog "Starte BitLocker-Datenerstellung für Computer..." -Level "INFO"
+
+        if (-not $script:CreatedComputers -or $script:CreatedComputers.Count -eq 0) {
+            Write-AppLog "Keine Computer für BitLocker-Daten vorhanden" -Level "WARN"
             [System.Windows.MessageBox]::Show("Es wurden noch keine Computer erstellt.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         # Anzahl der Computer bestimmen
-        $computerCount = $Global:GuiControls.TextBoxBitLockerComputerCount.Text
-        $randomSelection = $false  # CheckBox existiert nicht in der GUI
-        
+        $computerCount = $script:GuiControls.TextBoxBitLockerComputerCount.Text
+        $randomSelection = [bool]$script:GuiControls.CheckBoxBitLockerRandomSelection.IsChecked
+
         if ([string]::IsNullOrWhiteSpace($computerCount)) {
-            $computerCount = $Global:CreatedComputers.Count
+            $computerCount = $script:CreatedComputers.Count
         } else {
             $computerCount = ConvertTo-IntOrZero -Value $computerCount
-            if ($computerCount -gt $Global:CreatedComputers.Count) {
-                $computerCount = $Global:CreatedComputers.Count
-                Write-Log "Anzahl auf verfügbare Computer reduziert: $computerCount" -Level "INFO"
+            if ($computerCount -gt $script:CreatedComputers.Count) {
+                $computerCount = $script:CreatedComputers.Count
+                Write-AppLog "Anzahl auf verfügbare Computer reduziert: $computerCount" -Level "INFO"
             }
         }
-        
+
         if ($computerCount -le 0) {
-            Write-Log "Ungültige Anzahl Computer für BitLocker" -Level "WARN"
+            Write-AppLog "Ungültige Anzahl Computer für BitLocker" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Computern an.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie BitLocker Recovery Keys für $computerCount Computer erstellen?`n`n" +
             "Zufällige Auswahl: $(if ($randomSelection) { 'Ja' } else { 'Nein (erste X Computer)' })",
@@ -6298,51 +6242,52 @@ function Create-ComputerBitLockerData {
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+        if (-not $PSCmdlet.ShouldProcess("Erstellte Computer", "BitLocker-Wiederherstellungsdaten erstellen")) { return }
+
         Show-Progress -Text "Erstelle BitLocker Recovery Keys..."
-        
+
         # Computer auswählen
         # @() erzwingt ein Array - bei nur einem Computer würde sonst ein String indiziert (einzelnes Zeichen)
         $selectedComputers = @(if ($randomSelection) {
-            $Global:CreatedComputers | Get-Random -Count $computerCount
+            $script:CreatedComputers | Get-Random -Count $computerCount
         } else {
-            $Global:CreatedComputers | Select-Object -First $computerCount
+            $script:CreatedComputers | Select-Object -First $computerCount
         })
-        
+
         $successCount = 0
         $errorCount = 0
         $bitlockerData = New-Object System.Collections.Generic.List[object]
         $exportPath = $null
         $docPath = $null
-        
+
         for ($i = 0; $i -lt $selectedComputers.Count; $i++) {
             $computer = $selectedComputers[$i]
-            Update-Progress -Current ($i + 1) -Total $selectedComputers.Count -Text "Erstelle BitLocker Key für $computer"
-            
+            Write-GuiProgress -Current ($i + 1) -Total $selectedComputers.Count -Text "Erstelle BitLocker Key für $computer"
+
             try {
                 # Generiere Recovery-Informationen
                 $recoveryGuid = [System.Guid]::NewGuid()
-                $recoveryPassword = Generate-BitLockerRecoveryPassword
+                $recoveryPassword = Get-BitLockerRecoveryPassword
                 $recoveryId = $recoveryPassword.Substring(0, 8)
                 # 40 Hex-Zeichen (20 Zufallsbytes) - eine GUID hat nur 32 Hex-Zeichen
                 $tpmBytes = New-Object byte[] 20
                 $script:CryptoRng.GetBytes($tpmBytes)
                 $tpmKeyHash = ([System.BitConverter]::ToString($tpmBytes) -replace '-', '').ToUpper()
-                
+
                 # Hole Computer-Objekt
                 $computerObj = Get-ADComputer -Identity $computer -ErrorAction Stop
-                
+
                 # Simuliere verschiedene BitLocker-Attribute
                 $bitlockerAttributes = @{
                     'msTPM-OwnerInformation' = $tpmKeyHash
-                    'info' = "BitLocker Recovery ID: $recoveryId`nProtection Status: Enabled`nEncryption Method: AES-256`nTPM: Present and Ready"
+                    'info' = "BitLocker-Wiederherstellungs-ID: $recoveryId`nSchutzstatus: aktiviert`nVerschlüsselung: AES-256`nTPM: vorhanden und bereit (simuliert)"
                 }
-                
+
                 # Setze Attribute am Computer-Objekt
                 Set-ADComputer -Identity $computer -Replace $bitlockerAttributes -ErrorAction Stop
-                
+
                 # Versuche msFVE-RecoveryInformation zu erstellen (benötigt spezielle Rechte)
                 try {
                     New-ADObject -Name $recoveryGuid.ToString() `
@@ -6354,13 +6299,13 @@ function Create-ComputerBitLockerData {
                             'msFVE-VolumeGuid' = [System.Guid]::NewGuid().ToByteArray()
                         } `
                         -ErrorAction Stop
-                    
-                    Write-Log "BitLocker Recovery-Objekt für '$computer' erstellt" -Level "DEBUG"
+
+                    Write-AppLog "BitLocker Recovery-Objekt für '$computer' erstellt" -Level "DEBUG"
                 } catch {
                     # Fallback wenn keine Rechte für msFVE-RecoveryInformation
-                    Write-Log "Konnte msFVE-RecoveryInformation für '$computer' nicht erstellen (Rechte/Schema), verwende Fallback: $($_.Exception.Message)" -Level "DEBUG"
+                    Write-AppLog "Konnte msFVE-RecoveryInformation für '$computer' nicht erstellen (Rechte/Schema), verwende Fallback: $($_.Exception.Message)" -Level "DEBUG"
                 }
-                
+
                 # Speichere Daten für Export
                 $bitlockerData.Add([PSCustomObject]@{
                     ComputerName = $computer
@@ -6373,22 +6318,22 @@ function Create-ComputerBitLockerData {
                     VolumeType = "OperatingSystem"
                     CreatedDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
                 })
-                
+
                 $successCount++
-                Write-Log "BitLocker-Daten für '$computer' erstellt" -Level "SUCCESS"
-                
+                Write-AppLog "BitLocker-Daten für '$computer' erstellt" -Level "SUCCESS"
+
             } catch {
-                Write-Log "Fehler bei BitLocker-Daten für '$computer': $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler bei BitLocker-Daten für '$computer': $($_.Exception.Message)" -Level "ERROR"
                 $errorCount++
             }
         }
-        
+
         # Exportiere BitLocker-Daten
         if ($bitlockerData.Count -gt 0) {
             $exportPath = Get-ExportFilePath -FileName "BitLocker_ComputerKeys_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
             $bitlockerData | Export-Csv -Path $exportPath -NoTypeInformation -Encoding UTF8
-            Write-Log "BitLocker-Keys exportiert nach: $exportPath" -Level "INFO"
-            
+            Write-AppLog "BitLocker-Keys exportiert nach: $exportPath" -Level "INFO"
+
             # Erstelle zusätzliche Dokumentation
             $docPath = Get-ExportFilePath -FileName "BitLocker_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
             $documentation = @"
@@ -6420,9 +6365,9 @@ Test-Szenarien:
 "@
             $documentation | Out-File -FilePath $docPath -Encoding UTF8
         }
-        
+
         Hide-Progress
-        
+
         $message = @"
 BitLocker-Daten erfolgreich erstellt:
 
@@ -6434,51 +6379,53 @@ Dateien erstellt:
 - Keys: $exportPath
 - Dokumentation: $docPath
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "BitLocker-Daten erstellt", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei BitLocker-Datenerstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei BitLocker-Datenerstellung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Create-LAPSData {
+function New-LAPSData {
     <#
     .SYNOPSIS
     Erstellt LAPS (Local Administrator Password Solution) Daten für ausgewählte Systeme
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte LAPS-Datenerstellung..." -Level "INFO"
-        
-        if (-not $Global:CreatedComputers -or $Global:CreatedComputers.Count -eq 0) {
-            Write-Log "Keine Computer für LAPS-Daten vorhanden" -Level "WARN"
+        Write-AppLog "Starte LAPS-Datenerstellung..." -Level "INFO"
+
+        if (-not $script:CreatedComputers -or $script:CreatedComputers.Count -eq 0) {
+            Write-AppLog "Keine Computer für LAPS-Daten vorhanden" -Level "WARN"
             [System.Windows.MessageBox]::Show("Es wurden noch keine Computer erstellt.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         # Parameter auslesen
-        $systemCount = $Global:GuiControls.TextBoxLAPSSystemCount.Text
-        $includeServers = $true  # CheckBox existiert nicht in der GUI, Standard: Ja
-        $includeWorkstations = $true  # CheckBox existiert nicht in der GUI, Standard: Ja
-        
+        $systemCount = $script:GuiControls.TextBoxLAPSSystemCount.Text
+        $includeServers = [bool]$script:GuiControls.CheckBoxLAPSIncludeServers.IsChecked
+        $includeWorkstations = [bool]$script:GuiControls.CheckBoxLAPSIncludeWorkstations.IsChecked
+
         if (-not ($includeServers -or $includeWorkstations)) {
-            Write-Log "Keine System-Typen für LAPS ausgewählt" -Level "WARN"
+            Write-AppLog "Keine System-Typen für LAPS ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens einen System-Typ aus (Server oder Workstations).", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         # Systeme filtern
         $eligibleSystems = New-Object System.Collections.Generic.List[object]
-        foreach ($computer in $Global:CreatedComputers) {
+        foreach ($computer in $script:CreatedComputers) {
             try {
                 $compObj = Get-ADComputer -Identity $computer -Properties OperatingSystem -ErrorAction Stop
                 $os = $compObj.OperatingSystem
-                
+
                 $isServer = $os -like "*Server*"
                 $isWorkstation = $os -notlike "*Server*"
-                
+
                 if (($isServer -and $includeServers) -or ($isWorkstation -and $includeWorkstations)) {
                     $eligibleSystems.Add([PSCustomObject]@{
                         Name = $computer
@@ -6487,16 +6434,16 @@ function Create-LAPSData {
                     })
                 }
             } catch {
-                Write-Log "Fehler beim Prüfen von Computer '$computer': $($_.Exception.Message)" -Level "DEBUG"
+                Write-AppLog "Fehler beim Prüfen von Computer '$computer': $($_.Exception.Message)" -Level "DEBUG"
             }
         }
-        
+
         if ($eligibleSystems.Count -eq 0) {
-            Write-Log "Keine passenden Systeme für LAPS gefunden" -Level "WARN"
+            Write-AppLog "Keine passenden Systeme für LAPS gefunden" -Level "WARN"
             [System.Windows.MessageBox]::Show("Keine passenden Systeme für die ausgewählten Kriterien gefunden.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         # Anzahl bestimmen
         if ([string]::IsNullOrWhiteSpace($systemCount)) {
             $systemCount = $eligibleSystems.Count
@@ -6504,16 +6451,16 @@ function Create-LAPSData {
             $systemCount = ConvertTo-IntOrZero -Value $systemCount
             if ($systemCount -gt $eligibleSystems.Count) {
                 $systemCount = $eligibleSystems.Count
-                Write-Log "Anzahl auf verfügbare Systeme reduziert: $systemCount" -Level "INFO"
+                Write-AppLog "Anzahl auf verfügbare Systeme reduziert: $systemCount" -Level "INFO"
             }
         }
-        
+
         if ($systemCount -le 0) {
-            Write-Log "Ungültige Anzahl Systeme für LAPS" -Level "WARN"
+            Write-AppLog "Ungültige Anzahl Systeme für LAPS" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Systemen an.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie LAPS-Passwörter für $systemCount Systeme erstellen?`n`n" +
             "Verfügbare Systeme: $($eligibleSystems.Count)`n" +
@@ -6523,59 +6470,60 @@ function Create-LAPSData {
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+        if (-not $PSCmdlet.ShouldProcess("Erstellte Computer", "LAPS-Testdaten setzen")) { return }
+
         Show-Progress -Text "Erstelle LAPS-Passwörter..."
-        
+
         # Systeme auswählen
         # @() erzwingt ein Array (bei genau einem System sonst kein Indexzugriff möglich)
         $selectedSystems = @($eligibleSystems | Get-Random -Count $systemCount)
-        
+
         $successCount = 0
         $errorCount = 0
         $lapsData = New-Object System.Collections.Generic.List[object]
-        
+
         # LAPS-Passwort-Richtlinien
         $passwordComplexity = @{
             Server = 20       # Längere Passwörter für Server
             Workstation = 14  # Standard für Workstations
         }
-        
+
         for ($i = 0; $i -lt $selectedSystems.Count; $i++) {
             $system = $selectedSystems[$i]
-            Update-Progress -Current ($i + 1) -Total $selectedSystems.Count -Text "Erstelle LAPS-Passwort für $($system.Name)"
-            
+            Write-GuiProgress -Current ($i + 1) -Total $selectedSystems.Count -Text "Erstelle LAPS-Passwort für $($system.Name)"
+
             try {
                 # Generiere LAPS-Passwort basierend auf System-Typ
                 $pwdLength = $passwordComplexity[$system.Type]
-                $lapsPassword = Generate-SecurePassword -Complexity "Komplex (16 Zeichen + Spezial)" -IncludeNumbers $true -IncludeSymbols $true -ExcludeAmbiguous $true -Length $pwdLength
-                
+                $lapsPassword = Get-RandomPasswordText -Complexity "Komplex (16 Zeichen + Spezial)" -IncludeNumbers $true -IncludeSymbols $true -ExcludeAmbiguous $true -Length $pwdLength
+
                 # Setze Ablaufdatum (Standard: 30 Tage)
                 $expirationTime = (Get-Date).AddDays(30).ToFileTimeUtc()
-                
+
                 # LAPS-Attribute setzen
                 $lapsAttributes = @{
                     'ms-Mcs-AdmPwd' = $lapsPassword
                     'ms-Mcs-AdmPwdExpirationTime' = $expirationTime.ToString()
                 }
-                
+
                 # Versuche die offiziellen LAPS-Attribute zu setzen
                 try {
                     Set-ADComputer -Identity $system.Name -Replace $lapsAttributes -ErrorAction Stop
-                    Write-Log "LAPS-Attribute für '$($system.Name)' gesetzt" -Level "DEBUG"
+                    Write-AppLog "LAPS-Attribute für '$($system.Name)' gesetzt" -Level "DEBUG"
                 } catch {
                     # Fallback: Verwende Custom-Attribute
                     $fallbackAttributes = @{
-                        'adminDescription' = "LAPS Password Set: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-                        'info' = "LAPS Enabled | Password Length: $pwdLength | Expires: $((Get-Date).AddDays(30).ToString('yyyy-MM-dd'))"
-                        'comment' = "LAPS Password: See secure storage"
+                        'adminDescription' = "LAPS-Kennwort gesetzt: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+                        'info' = "LAPS aktiv | Kennwortlänge: $pwdLength | Ablauf: $((Get-Date).AddDays(30).ToString('yyyy-MM-dd'))"
+                        'comment' = "LAPS-Testkennwort (simuliert) im Attribut ms-Mcs-AdmPwd"
                     }
-                    
+
                     Set-ADComputer -Identity $system.Name -Replace $fallbackAttributes -ErrorAction Stop
-                    Write-Log "LAPS-Daten als Custom-Attribute gespeichert (Fallback)" -Level "DEBUG"
+                    Write-AppLog "LAPS-Daten als Custom-Attribute gespeichert (Fallback)" -Level "DEBUG"
                 }
-                
+
                 # Speichere LAPS-Daten für Export
                 $lapsData.Add([PSCustomObject]@{
                     ComputerName = $system.Name
@@ -6588,12 +6536,12 @@ function Create-LAPSData {
                     LastChangeBy = $env:USERNAME
                     Status = "Active"
                 })
-                
+
                 $successCount++
-                Write-Log "LAPS-Passwort für '$($system.Name)' erstellt" -Level "SUCCESS"
-                
+                Write-AppLog "LAPS-Passwort für '$($system.Name)' erstellt" -Level "SUCCESS"
+
             } catch {
-                Write-Log "Fehler bei LAPS-Passwort für '$($system.Name)': $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler bei LAPS-Passwort für '$($system.Name)': $($_.Exception.Message)" -Level "ERROR"
                 $lapsData.Add([PSCustomObject]@{
                     ComputerName = $system.Name
                     SystemType = $system.Type
@@ -6608,13 +6556,13 @@ function Create-LAPSData {
                 $errorCount++
             }
         }
-        
+
         # Exportiere LAPS-Daten
         if ($lapsData.Count -gt 0) {
             $exportPath = (Get-ExportFilePath -FileName "LAPS_Passwords_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
             $lapsData | Export-Csv -Path $exportPath -NoTypeInformation -Encoding UTF8
-            Write-Log "LAPS-Passwörter exportiert nach: $exportPath" -Level "INFO"
-            
+            Write-AppLog "LAPS-Passwörter exportiert nach: $exportPath" -Level "INFO"
+
             # Erstelle LAPS-Bericht
             $reportPath = (Get-ExportFilePath -FileName "LAPS_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
             $report = @"
@@ -6663,15 +6611,15 @@ Get-ADComputer -Identity <ComputerName> -Properties ms-Mcs-AdmPwd,ms-Mcs-AdmPwdE
 Set-ADComputer -Identity <ComputerName> -Replace @{'ms-Mcs-AdmPwdExpirationTime'='0'}
 
 # LAPS-Status prüfen:
-Get-ADComputer -Filter * -Properties ms-Mcs-AdmPwd,ms-Mcs-AdmPwdExpirationTime | 
-    Where-Object {$_.ms-Mcs-AdmPwd} | 
+Get-ADComputer -Filter * -Properties ms-Mcs-AdmPwd,ms-Mcs-AdmPwdExpirationTime |
+    Where-Object {$_.ms-Mcs-AdmPwd} |
     Select Name,ms-Mcs-AdmPwdExpirationTime
 "@
             $report | Out-File -FilePath $reportPath -Encoding UTF8
         }
-        
+
         Hide-Progress
-        
+
         $message = @"
 LAPS-Passwörter erfolgreich erstellt:
 
@@ -6686,12 +6634,12 @@ Dateien erstellt:
 WICHTIG: Die exportierte CSV enthält Klartext-Passwörter!
 Diese Datei muss sicher aufbewahrt oder nach dem Test gelöscht werden.
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "LAPS-Passwörter erstellt", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei LAPS-Datenerstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei LAPS-Datenerstellung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
@@ -6700,24 +6648,26 @@ Diese Datei muss sicher aufbewahrt oder nach dem Test gelöscht werden.
 
 #region Test-Szenarien - Implementierung
 
-function Create-TestDataSet {
+function New-TestDataSet {
     <#
     .SYNOPSIS
     Erstellt umfangreiche Testdaten-Sets mit realistischer Verteilung
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Testdaten-Set Erstellung..." -Level "INFO"
-        
-        $dataSize = $Global:GuiControls.ComboBoxTestDataSize.SelectedItem
+        Write-AppLog "Starte Testdaten-Set Erstellung..." -Level "INFO"
+
+        $dataSize = $script:GuiControls.ComboBoxTestDataSize.SelectedItem
         if (-not $dataSize) {
-            Write-Log "Keine Testdaten-Größe ausgewählt" -Level "WARN"
+            Write-AppLog "Keine Testdaten-Größe ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie eine Testdaten-Größe aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
-        $realisticData = $Global:GuiControls.CheckBoxRealisticData.IsChecked
-        $historicalData = $false  # CheckBox existiert nicht in der GUI
-        
+
+        $realisticData = $script:GuiControls.CheckBoxRealisticData.IsChecked
+        $historicalData = [bool]$script:GuiControls.CheckBoxHistoricalData.IsChecked
+
         # Bestimme Anzahl der zu erstellenden Objekte
         $objectCounts = switch ($dataSize.Content) {
             "Klein (10-50 Objekte)" { @{Users=30; Groups=10; Computers=10} }
@@ -6725,7 +6675,7 @@ function Create-TestDataSet {
             "Groß (500-5000 Objekte)" { @{Users=2000; Groups=200; Computers=500} }
             "Enterprise (5000+ Objekte)" { @{Users=10000; Groups=500; Computers=2000} }
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie folgendes Testdaten-Set erstellen?`n`n" +
             "- $($objectCounts.Users) Benutzer`n" +
@@ -6737,27 +6687,33 @@ function Create-TestDataSet {
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+        if (-not $PSCmdlet.ShouldProcess($targetOU, "Testdaten-Set erstellen")) { return }
+
         # Basis-OU für Testdaten
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
+        $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
         if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
             $domain = Get-ADDomain
             $targetOU = $domain.DistinguishedName
         }
-        
+
         # Erstelle Test-OU-Struktur
         Show-Progress -Text "Erstelle Test-OU-Struktur..." -Value 0
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
+        $testOUs = Initialize-TestOU -BaseOU $targetOU
         $usersPath = if ($testOUs["USERS"]) { $testOUs["USERS"] } else { $targetOU }
         $groupsPath = if ($testOUs["GROUPS"]) { $testOUs["GROUPS"] } else { $targetOU }
         $computersPath = if ($testOUs["COMPUTERS"]) { $testOUs["COMPUTERS"] } else { $targetOU }
         $usersByDepartment = @{}
-        
+
         $totalObjects = $objectCounts.Users + $objectCounts.Groups + $objectCounts.Computers
         $currentObject = 0
-        
+        $createdUserCount = 0
+        $createdGroupCount = 0
+        $createdComputerCount = 0
+        $usedSamNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $usedCNs = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
         # Realistische Abteilungsverteilung
         $departmentDistribution = if ($realisticData) {
             @{
@@ -6777,25 +6733,23 @@ function Create-TestDataSet {
             $depts | ForEach-Object { $distribution[$_] = 1.0 / $depts.Count }
             $distribution
         }
-        
+
         # 1. Erstelle Benutzer
-        Update-Progress -Current 0 -Total $totalObjects -Text "Erstelle Benutzer..."
-        
+        Write-GuiProgress -Current 0 -Total $totalObjects -Text "Erstelle Benutzer..."
+
         foreach ($dept in $departmentDistribution.Keys) {
             $deptUserCount = [math]::Round($objectCounts.Users * $departmentDistribution[$dept])
             $usersByDepartment[$dept] = New-Object System.Collections.Generic.List[string]
-            
+
             for ($i = 1; $i -le $deptUserCount; $i++) {
                 $currentObject++
-                
+
                 try {
                     $firstName = Get-RandomFirstName
                     $lastName = Get-RandomLastName
-                    # sAMAccountName max. 20 Zeichen, nur unkritische Zeichen
-                    $samBase = ("$firstName.$lastName".ToLower() -replace 'ä','ae' -replace 'ö','oe' -replace 'ü','ue' -replace 'ß','ss' -replace '[^a-z0-9.]','')
-                    if ($samBase.Length -gt 17) { $samBase = $samBase.Substring(0, 17) }
-                    $samAccountName = "$samBase$(Get-Random -Minimum 100 -Maximum 999)"
-                    
+                    $samAccountName = Get-UniqueSamAccountName -GivenName $firstName -Surname $lastName -UsedNames $usedSamNames
+                    $commonName = Get-AvailableObjectName -Name "$firstName $lastName" -Path $usersPath -Suffix $samAccountName -UsedNames $usedCNs
+
                     # Historische Daten simulieren
                     $createdDate = if ($historicalData) {
                         # Zufälliges Datum in den letzten 5 Jahren
@@ -6803,17 +6757,17 @@ function Create-TestDataSet {
                     } else {
                         Get-Date
                     }
-                    
+
                     $userParams = @{
-                        Name = "$firstName $lastName"
+                        Name = $commonName
                         SamAccountName = $samAccountName
-                        UserPrincipalName = "$samAccountName@$((Get-CachedADDomain).DNSRoot)"
+                        UserPrincipalName = (Get-UserPrincipalName -SamAccountName $samAccountName)
                         GivenName = $firstName
                         Surname = $lastName
                         DisplayName = "$firstName $lastName"
                         Department = $dept
                         Title = Get-RandomJobTitle
-                        Company = "Test Company"
+                        Company = "Testfirma"
                         City = Get-RandomCity
                         StreetAddress = Get-RandomStreetAddress
                         PostalCode = Get-RandomPostalCode
@@ -6822,32 +6776,33 @@ function Create-TestDataSet {
                         MobilePhone = Get-RandomPhoneNumber
                         Path = $usersPath
                         Enabled = $true
-                        AccountPassword = (New-RandomSecurePassword)
+                        AccountPassword = (Get-InitialUserPassword)
                         ChangePasswordAtLogon = $false
                     }
-                    
+
                     # whenCreated ist systemverwaltet und kann nicht gesetzt werden -> historisches Datum in der Beschreibung
                     if ($historicalData) {
                         $userParams.Description = "Simuliertes Erstellungsdatum: $($createdDate.ToString('yyyy-MM-dd'))"
                     }
-                    
+
                     New-ADUser @userParams -ErrorAction Stop
-                    $Global:CreatedUsers.Add($samAccountName)
+                    $script:CreatedUsers.Add($samAccountName)
                     $usersByDepartment[$dept].Add($samAccountName)
-                    
+                    $createdUserCount++
+
                 } catch {
-                    Write-Log "Fehler beim Erstellen von Testbenutzer: $($_.Exception.Message)" -Level "WARN"
+                    Write-AppLog "Fehler beim Erstellen von Testbenutzer: $($_.Exception.Message)" -Level "WARN"
                 }
-                
+
                 if ($currentObject % 10 -eq 0) {
-                    Update-Progress -Current $currentObject -Total $totalObjects -Text "Erstelle Objekte... ($currentObject/$totalObjects)"
+                    Write-GuiProgress -Current $currentObject -Total $totalObjects -Text "Erstelle Objekte"
                 }
             }
         }
-        
+
         # 2. Erstelle Gruppen
-        Update-Progress -Current $currentObject -Total $totalObjects -Text "Erstelle Gruppen..."
-        
+        Write-GuiProgress -Current $currentObject -Total $totalObjects -Text "Erstelle Gruppen..."
+
         # Erstelle Abteilungsgruppen
         foreach ($dept in $departmentDistribution.Keys) {
             try {
@@ -6855,138 +6810,142 @@ function Create-TestDataSet {
                 New-ADGroup -Name $groupName `
                     -GroupScope Global `
                     -GroupCategory Security `
-                    -Description "$dept Department Group" `
+                    -Description "Abteilungsgruppe $dept" `
                     -Path $groupsPath `
                     -ErrorAction Stop
-                
-                $Global:CreatedGroups.Add($groupName)
+
+                $script:CreatedGroups.Add($groupName)
+                $createdGroupCount++
                 $currentObject++
-                
+
                 # Nur die in diesem Lauf erstellten Benutzer der Abteilung hinzufügen (ohne erneute AD-Abfrage)
                 $deptUsers = $usersByDepartment[$dept]
                 if ($deptUsers -and $deptUsers.Count -gt 0) {
                     Add-ADGroupMember -Identity $groupName -Members $deptUsers.ToArray() -ErrorAction SilentlyContinue
                 }
-                
+
             } catch {
-                Write-Log "Fehler beim Erstellen von Gruppe '$groupName': $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler beim Erstellen von Gruppe '$groupName': $($_.Exception.Message)" -Level "WARN"
             }
         }
-        
+
         # Erstelle zusätzliche Gruppen
         $additionalGroupCount = $objectCounts.Groups - $departmentDistribution.Keys.Count
         for ($i = 1; $i -le $additionalGroupCount; $i++) {
             try {
                 $groupType = @("Project", "Security", "Distribution", "Resource", "Application") | Get-Random
                 $groupName = "$groupType`_Group_$(Get-Random -Minimum 1000 -Maximum 9999)"
-                
+
                 New-ADGroup -Name $groupName `
                     -GroupScope Global `
                     -GroupCategory Security `
-                    -Description "$groupType Group" `
+                    -Description "Testgruppe ($groupType)" `
                     -Path $groupsPath `
                     -ErrorAction Stop
-                
-                $Global:CreatedGroups.Add($groupName)
+
+                $script:CreatedGroups.Add($groupName)
+                $createdGroupCount++
                 $currentObject++
-                
+
             } catch {
-                Write-Log "Fehler beim Erstellen von Gruppe: $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler beim Erstellen von Gruppe: $($_.Exception.Message)" -Level "WARN"
             }
         }
-        
+
         # 3. Erstelle Computer
-        Update-Progress -Current $currentObject -Total $totalObjects -Text "Erstelle Computer..."
-        
+        Write-GuiProgress -Current $currentObject -Total $totalObjects -Text "Erstelle Computer..."
+
         $computerTypes = if ($realisticData) {
             @{
-                "Workstations" = 0.60
-                "Laptops" = 0.25
+                "Arbeitsplatzrechner" = 0.60
+                "Notebooks" = 0.25
                 "Server" = 0.10
-                "Virtual Machines" = 0.05
+                "Virtuelle Maschinen" = 0.05
             }
         } else {
             @{
-                "Workstations" = 0.25
-                "Laptops" = 0.25
+                "Arbeitsplatzrechner" = 0.25
+                "Notebooks" = 0.25
                 "Server" = 0.25
-                "Virtual Machines" = 0.25
+                "Virtuelle Maschinen" = 0.25
             }
         }
-        
+
         foreach ($compType in $computerTypes.Keys) {
             $typeCount = [math]::Round($objectCounts.Computers * $computerTypes[$compType])
             $typePrefix = switch ($compType) {
-                "Workstations" { "WS" }
-                "Laptops" { "LT" }
+                "Arbeitsplatzrechner" { "WS" }
+                "Notebooks" { "LT" }
                 "Server" { "SRV" }
-                "Virtual Machines" { "VM" }
+                "Virtuelle Maschinen" { "VM" }
             }
-            
+
             for ($i = 1; $i -le $typeCount; $i++) {
                 try {
                     $computerName = "$typePrefix-TEST-$(Get-Random -Minimum 10000 -Maximum 99999)"
-                    
+
                     New-ADComputer -Name $computerName `
                         -SamAccountName "$computerName`$" `
                         -Path $computersPath `
                         -Enabled $true `
-                        -Description "$compType - Test Data Set" `
+                        -Description "$compType - Testdaten-Set" `
                         -OperatingSystem $(if ($compType -eq "Server") { "Windows Server 2022" } else { "Windows 11" }) `
                         -ErrorAction Stop
-                    
-                    $Global:CreatedComputers.Add($computerName)
+
+                    $script:CreatedComputers.Add($computerName)
+                    $createdComputerCount++
                     $currentObject++
-                    
+
                 } catch {
-                    Write-Log "Fehler beim Erstellen von Computer: $($_.Exception.Message)" -Level "WARN"
+                    Write-AppLog "Fehler beim Erstellen von Computer: $($_.Exception.Message)" -Level "WARN"
                 }
             }
         }
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = @"
-Testdaten-Set erfolgreich erstellt:
+Testdaten-Set erstellt:
 
-Benutzer: $($Global:CreatedUsers.Count)
-Gruppen: $($Global:CreatedGroups.Count)
-Computer: $($Global:CreatedComputers.Count)
-
-Gesamtobjekte: $($Global:CreatedUsers.Count + $Global:CreatedGroups.Count + $Global:CreatedComputers.Count)
+Benutzer: $createdUserCount von $($objectCounts.Users)
+Gruppen: $createdGroupCount von $($objectCounts.Groups)
+Computer: $createdComputerCount von $($objectCounts.Computers)
 
 Die Objekte wurden in dedizierten Test-OUs erstellt.
+Details zu Fehlern finden Sie im Protokoll.
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "Testdaten erstellt", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei Testdaten-Set Erstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Testdaten-Set Erstellung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Activate-ChaosMode {
+function New-ChaosTestData {
     <#
     .SYNOPSIS
     Aktiviert den Chaos-Modus für fehlerhafte/problematische Testdaten
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "WARNUNG: Chaos-Modus wird aktiviert..." -Level "WARN"
-        
-        $invalidData = $Global:GuiControls.CheckBoxInvalidData.IsChecked
-        $missingAttributes = $Global:GuiControls.CheckBoxMissingAttributes.IsChecked
-        $duplicateEntries = $Global:GuiControls.CheckBoxDuplicateEntries.IsChecked
-        $specialCharacters = $false  # CheckBox existiert nicht in der GUI
-        
+        Write-AppLog "WARNUNG: Chaos-Modus wird aktiviert..." -Level "WARN"
+
+        $invalidData = $script:GuiControls.CheckBoxInvalidData.IsChecked
+        $missingAttributes = $script:GuiControls.CheckBoxMissingAttributes.IsChecked
+        $duplicateEntries = $script:GuiControls.CheckBoxDuplicateEntries.IsChecked
+        $specialCharacters = [bool]$script:GuiControls.CheckBoxSpecialCharacters.IsChecked
+
         if (-not ($invalidData -or $missingAttributes -or $duplicateEntries -or $specialCharacters)) {
-            Write-Log "Keine Chaos-Optionen ausgewählt" -Level "WARN"
+            Write-AppLog "Keine Chaos-Optionen ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens eine Chaos-Option aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "WARNUNG: Der Chaos-Modus erstellt absichtlich fehlerhafte Daten!`n`n" +
             "Dies kann zu Problemen in Ihrer Test-Umgebung führen.`n`n" +
@@ -7000,24 +6959,28 @@ function Activate-ChaosMode {
             "YesNo",
             "Warning"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+        if (-not $PSCmdlet.ShouldProcess($targetOU, "Chaos-Testdaten erstellen")) { return }
+
         # Basis-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
+        $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
         if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
             $domain = Get-ADDomain
             $targetOU = $domain.DistinguishedName
         }
-        
+
         Show-Progress -Text "Aktiviere Chaos-Modus..."
+        # Chaos-Benutzer landen in der Test-OU USERS, damit sie gemeinsam bereinigt werden können
+        $testOUs = Initialize-TestOU -BaseOU $targetOU
+        if ($testOUs["USERS"]) { $targetOU = $testOUs["USERS"] }
         $chaosCount = 0
         $errorCount = 0
-        
+
         # 1. Ungültige Daten
         if ($invalidData) {
-            Update-Progress -Current 25 -Total 100 -Text "Erstelle ungültige Daten..."
-            
+            Write-GuiProgress -Current 25 -Total 100 -Text "Erstelle ungültige Daten..."
+
             # Benutzer mit ungültigen E-Mail-Adressen
             for ($i = 1; $i -le 5; $i++) {
                 try {
@@ -7027,28 +6990,28 @@ function Activate-ChaosMode {
                         Path = $targetOU
                         Enabled = $false # Deaktiviert, falls die Domänen-Richtlinie das zu kurze Passwort akzeptiert
                         EmailAddress = "not@valid@email@address.com"
-                        AccountPassword = (New-RandomSecurePassword -Complexity "Einfach (8 Zeichen)" -Length 4) # Absichtlich zu kurzes (zufälliges) Passwort
+                        AccountPassword = (Get-RandomSecurePassword -Complexity "Einfach (8 Zeichen)" -Length 4) # Absichtlich zu kurzes (zufälliges) Passwort
                     }
-                    
+
                     New-ADUser @invalidUser -ErrorAction Stop
-                    $Global:CreatedUsers.Add($invalidUser.SamAccountName)
+                    $script:CreatedUsers.Add($invalidUser.SamAccountName)
                     $chaosCount++
                 } catch {
-                    Write-Log "Erwarteter Fehler bei ungültigen Daten: $($_.Exception.Message)" -Level "DEBUG"
+                    Write-AppLog "Erwarteter Fehler bei ungültigen Daten: $($_.Exception.Message)" -Level "DEBUG"
                     $errorCount++
                     # New-ADUser legt das Objekt bei abgelehntem Passwort ggf. trotzdem (deaktiviert) an -> nachverfolgen, damit es bereinigt werden kann
                     $orphan = Get-ADUser -Filter "SamAccountName -eq '$(ConvertTo-ADFilterValue -Value $invalidUser.SamAccountName)'" -ErrorAction SilentlyContinue
-                    if ($orphan -and -not $Global:CreatedUsers.Contains($invalidUser.SamAccountName)) {
-                        $Global:CreatedUsers.Add($invalidUser.SamAccountName)
+                    if ($orphan -and -not $script:CreatedUsers.Contains($invalidUser.SamAccountName)) {
+                        $script:CreatedUsers.Add($invalidUser.SamAccountName)
                     }
                 }
             }
         }
-        
+
         # 2. Fehlende Attribute
         if ($missingAttributes) {
-            Update-Progress -Current 50 -Total 100 -Text "Erstelle Benutzer mit fehlenden Attributen..."
-            
+            Write-GuiProgress -Current 50 -Total 100 -Text "Erstelle Benutzer mit fehlenden Attributen..."
+
             for ($i = 1; $i -le 5; $i++) {
                 try {
                     $incompleteUser = @{
@@ -7056,24 +7019,24 @@ function Activate-ChaosMode {
                         SamAccountName = "incomplete.user.$i"
                         Path = $targetOU
                         Enabled = $true
-                        AccountPassword = (New-RandomSecurePassword)
+                        AccountPassword = (Get-RandomSecurePassword)
                         # Absichtlich fehlende Attribute: GivenName, Surname, DisplayName, Email
                     }
-                    
+
                     New-ADUser @incompleteUser -ErrorAction Stop
-                    $Global:CreatedUsers.Add($incompleteUser.SamAccountName)
+                    $script:CreatedUsers.Add($incompleteUser.SamAccountName)
                     $chaosCount++
                 } catch {
-                    Write-Log "Fehler bei Benutzer mit fehlenden Attributen: $($_.Exception.Message)" -Level "DEBUG"
+                    Write-AppLog "Fehler bei Benutzer mit fehlenden Attributen: $($_.Exception.Message)" -Level "DEBUG"
                     $errorCount++
                 }
             }
         }
-        
+
         # 3. Doppelte Einträge
         if ($duplicateEntries) {
-            Update-Progress -Current 75 -Total 100 -Text "Versuche doppelte Einträge zu erstellen..."
-            
+            Write-GuiProgress -Current 75 -Total 100 -Text "Versuche doppelte Einträge zu erstellen..."
+
             # Versuche denselben Benutzer mehrmals zu erstellen
             $duplicateName = "duplicate.user"
             for ($i = 1; $i -le 3; $i++) {
@@ -7082,63 +7045,68 @@ function Activate-ChaosMode {
                         -SamAccountName $duplicateName `
                         -Path $targetOU `
                         -Enabled $true `
-                        -AccountPassword (New-RandomSecurePassword) `
+                        -AccountPassword (Get-RandomSecurePassword) `
                         -ErrorAction Stop
-                    
+
                     if ($i -eq 1) {
-                        $Global:CreatedUsers.Add($duplicateName)
+                        $script:CreatedUsers.Add($duplicateName)
                         $chaosCount++
                     }
                 } catch {
                     if ($i -gt 1) {
-                        Write-Log "Erwarteter Fehler bei Duplikat: $($_.Exception.Message)" -Level "DEBUG"
+                        Write-AppLog "Erwarteter Fehler bei Duplikat: $($_.Exception.Message)" -Level "DEBUG"
                     } else {
                         $errorCount++
                     }
                 }
             }
         }
-        
+
         # 4. Sonderzeichen
         if ($specialCharacters) {
-            Update-Progress -Current 100 -Total 100 -Text "Erstelle Einträge mit Sonderzeichen..."
-            
+            Write-GuiProgress -Current 100 -Total 100 -Text "Erstelle Einträge mit Sonderzeichen..."
+
             $specialNames = @(
                 "Müller, Dr. Hans-Peter",
                 "O'Brien",
                 "José García-López",
-                "Владимир Путин",
+                "Иван Петров",
                 "王小明",
                 "Test & User",
                 "User (Test)",
                 "Test/User"
             )
-            
+
+            $specialIndex = 0
             foreach ($specialName in $specialNames) {
+                $specialIndex++
                 try {
-                    # Normalisiere SamAccountName
-                    $samName = Normalize-SamAccountName -SamAccountName $specialName
-                    
+                    # Normalisiere SamAccountName (rein nicht-lateinische Namen ergeben keinen gültigen Namen)
+                    $samName = ConvertTo-NormalizedSamAccountName -SamAccountName $specialName
+                    if ([string]::IsNullOrWhiteSpace($samName) -or $samName -notmatch '[A-Za-z0-9]') {
+                        $samName = "chaos.sonder$specialIndex"
+                    }
+
                     New-ADUser -Name $specialName `
                         -SamAccountName $samName `
                         -DisplayName $specialName `
                         -Path $targetOU `
                         -Enabled $true `
-                        -AccountPassword (New-RandomSecurePassword) `
+                        -AccountPassword (Get-RandomSecurePassword) `
                         -ErrorAction Stop
-                    
-                    $Global:CreatedUsers.Add($samName)
+
+                    $script:CreatedUsers.Add($samName)
                     $chaosCount++
                 } catch {
-                    Write-Log "Fehler bei Sonderzeichen-Benutzer '$specialName': $($_.Exception.Message)" -Level "DEBUG"
+                    Write-AppLog "Fehler bei Sonderzeichen-Benutzer '$specialName': $($_.Exception.Message)" -Level "DEBUG"
                     $errorCount++
                 }
             }
         }
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         $message = @"
 Chaos-Modus abgeschlossen:
 
@@ -7147,12 +7115,12 @@ Erwartete Fehler: $errorCount
 
 Die erstellten Objekte können für Fehlerbehandlungs-Tests verwendet werden.
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "Chaos-Modus aktiviert", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler im Chaos-Modus: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler im Chaos-Modus: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler im Chaos-Modus:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
@@ -7160,225 +7128,198 @@ Die erstellten Objekte können für Fehlerbehandlungs-Tests verwendet werden.
 function Start-PerformanceTest {
     <#
     .SYNOPSIS
-    Führt Performance-Tests für AD-Operationen durch
-    #>
-    try {
-        Write-Log "Starte Performance-Test..." -Level "INFO"
-        
-        $objectCount = $Global:GuiControls.TextBoxPerformanceCount.Text
-        $batchSize = $Global:GuiControls.TextBoxBatchSize.Text
-        
-        if ([string]::IsNullOrWhiteSpace($objectCount) -or [string]::IsNullOrWhiteSpace($batchSize)) {
-            Write-Log "Performance-Test Parameter fehlen" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie Anzahl der Objekte und Batch-Größe an.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        $objectCount = ConvertTo-IntOrZero -Value $objectCount
-        $batchSize = ConvertTo-IntOrZero -Value $batchSize
-        
-        if ($objectCount -le 0 -or $batchSize -le 0) {
-            Write-Log "Ungültige Performance-Test Parameter" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Anzahl und Batch-Größe müssen größer als 0 sein.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        $result = [System.Windows.MessageBox]::Show(
-            "Performance-Test-Konfiguration:`n`n" +
-            "Objekte: $objectCount`n" +
-            "Batch-Größe: $batchSize`n" +
-            "Geschätzte Batches: $([math]::Ceiling($objectCount / $batchSize))`n`n" +
-            "Dies kann je nach Größe mehrere Minuten dauern.`n`n" +
-            "Fortfahren?",
-            "Performance-Test starten",
-            "YesNo",
-            "Question"
-        )
-        
-        if ($result -ne "Yes") { return }
-        
-        # Basis-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
-        if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
-            $domain = Get-ADDomain
-            $targetOU = $domain.DistinguishedName
-        }
-        
-        # Performance-Metriken
-        $metrics = @{
-            StartTime = Get-Date
-            EndTime = $null
-            TotalObjects = $objectCount
-            SuccessfulObjects = 0
-            FailedObjects = 0
-            BatchCount = [math]::Ceiling($objectCount / $batchSize)
-            BatchTimes = @()
-        }
-        
-        Show-Progress -Text "Performance-Test läuft..." -Value 0
-        
-        # Führe Test in Batches durch
-        $currentObject = 0
-        $batchNumber = 1
-        
-        while ($currentObject -lt $objectCount) {
-            $batchStart = Get-Date
-            $batchObjects = [math]::Min($batchSize, $objectCount - $currentObject)
-            
-            Update-Progress -Current $currentObject -Total $objectCount -Text "Verarbeite Batch $batchNumber von $($metrics.BatchCount)..."
-            
-            # Erstelle Objekte im Batch
-            for ($i = 1; $i -le $batchObjects; $i++) {
-                try {
-                    $userName = "perftest_$(Get-Random -Minimum 100000 -Maximum 999999)"
-                    
-                    New-ADUser -Name $userName `
-                        -SamAccountName $userName `
-                        -Path $targetOU `
-                        -Enabled $false `
-                        -Description "Performance Test Object" `
-                        -AccountPassword (New-RandomSecurePassword) `
-                        -ErrorAction Stop
-                    
-                    $Global:CreatedUsers.Add($userName)
-                    $metrics.SuccessfulObjects++
-                } catch {
-                    $metrics.FailedObjects++
-                    Write-Log "Performance-Test Fehler: $($_.Exception.Message)" -Level "DEBUG"
-                }
-                
-                $currentObject++
-            }
-            
-            $batchEnd = Get-Date
-            $batchDuration = ($batchEnd - $batchStart).TotalSeconds
-            $metrics.BatchTimes += $batchDuration
-            
-            Write-Log "Batch $batchNumber abgeschlossen in $batchDuration Sekunden" -Level "DEBUG"
-            $batchNumber++
-            
-            # Kleine Pause zwischen Batches
-            if ($currentObject -lt $objectCount) {
-                Start-Sleep -Milliseconds 100
-            }
-        }
-        
-        $metrics.EndTime = Get-Date
-        $totalDuration = ($metrics.EndTime - $metrics.StartTime).TotalSeconds
-        
-        Hide-Progress
-        Update-Statistics
-        
-        # Berechne Statistiken
-        $avgBatchTime = ($metrics.BatchTimes | Measure-Object -Average).Average
-        $objectsPerSecond = $metrics.SuccessfulObjects / $totalDuration
-        
-        # Erstelle Bericht
-        $reportPath = (Get-ExportFilePath -FileName "PerformanceTest_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
-        $report = @"
-Active Directory Performance Test Report
-=======================================
-Datum: $(Get-Date)
+    Misst die Anlage-Geschwindigkeit von AD-Benutzern in Batches
 
-Test-Konfiguration:
-- Ziel-Objekte: $($metrics.TotalObjects)
+    .DESCRIPTION
+    Legt deaktivierte Testbenutzer (perf_...) in der Test-OU USERS an, misst die Dauer je Batch und speichert
+    einen Bericht (TXT) sowie die Messwerte (CSV) im Exportordner. Die Benutzer werden in der Liste der
+    erstellten Benutzer nachverfolgt und können über die Benutzer-Löschfunktion entfernt werden.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    Write-AppLog "Starte Performance-Test..." -Level "INFO"
+
+    $objectCount = ConvertTo-IntOrZero -Value ([string]$script:GuiControls.TextBoxPerformanceCount.Text)
+    $batchSize = ConvertTo-IntOrZero -Value ([string]$script:GuiControls.TextBoxBatchSize.Text)
+    if ($objectCount -lt 1 -or $objectCount -gt 5000 -or $batchSize -lt 1 -or $batchSize -gt $objectCount) {
+        Write-AppLog "Ungültige Performance-Test-Parameter (Objekte: $objectCount, Batch: $batchSize)" -Level "WARN"
+        [System.Windows.MessageBox]::Show("Bitte geben Sie 1 bis 5000 Objekte und eine Batch-Größe zwischen 1 und der Objektanzahl an.", "Hinweis", "OK", "Warning") | Out-Null
+        return
+    }
+
+    $targetOU = ([string]$script:GuiControls.ComboBoxTargetOU.Text).Trim()
+    if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
+        $targetOU = (Get-CachedADDomain).DistinguishedName
+    }
+
+    $batchCount = [math]::Ceiling($objectCount / $batchSize)
+    $result = [System.Windows.MessageBox]::Show(
+        "Performance-Test-Konfiguration:`n`n" +
+        "Objekte (deaktivierte Benutzer): $objectCount`n" +
+        "Batch-Größe: $batchSize`n" +
+        "Batches: $batchCount`n" +
+        "Ziel: Test-OU 'USERS' unterhalb von $targetOU`n`n" +
+        "Dies kann je nach Größe mehrere Minuten dauern. Fortfahren?",
+        "Performance-Test starten",
+        "YesNo",
+        "Question"
+    )
+    if ($result -ne "Yes") { return }
+    if (-not $PSCmdlet.ShouldProcess($targetOU, "$objectCount Performance-Testbenutzer erstellen")) { return }
+
+    Show-Progress -Text "Performance-Test läuft..." -Value 0
+    $testOUs = Initialize-TestOU -BaseOU $targetOU
+    $userOU = if ($testOUs["USERS"]) { $testOUs["USERS"] } else { $targetOU }
+
+    # Eindeutiges Präfix je Lauf (maximal 20 Zeichen: pt + MMddHHmmss + _ + 4 Ziffern)
+    $runId = Get-Date -Format 'MMddHHmmss'
+    $batchMetrics = New-Object System.Collections.Generic.List[object]
+    $successCount = 0
+    $failedCount = 0
+    $currentObject = 0
+    $totalWatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    for ($batchNumber = 1; $batchNumber -le $batchCount; $batchNumber++) {
+        $batchObjects = [math]::Min($batchSize, $objectCount - $currentObject)
+        $batchWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $batchSuccess = 0
+
+        for ($i = 1; $i -le $batchObjects; $i++) {
+            $currentObject++
+            $samAccountName = "pt${runId}_$('{0:D4}' -f $currentObject)"
+            try {
+                New-ADUser -Name $samAccountName `
+                    -SamAccountName $samAccountName `
+                    -UserPrincipalName (Get-UserPrincipalName -SamAccountName $samAccountName) `
+                    -Path $userOU `
+                    -Enabled $false `
+                    -Description "Performance-Testobjekt ($runId)" `
+                    -AccountPassword (Get-InitialUserPassword) `
+                    -ErrorAction Stop
+                $script:CreatedUsers.Add($samAccountName)
+                $successCount++
+                $batchSuccess++
+            } catch {
+                $failedCount++
+                Write-AppLog "Performance-Test: Fehler bei '$samAccountName': $($_.Exception.Message)" -Level "WARN"
+            }
+        }
+
+        $batchWatch.Stop()
+        $batchMetrics.Add([PSCustomObject]@{
+            Batch = $batchNumber
+            Objekte = $batchObjects
+            Erfolgreich = $batchSuccess
+            DauerSekunden = [math]::Round($batchWatch.Elapsed.TotalSeconds, 3)
+        })
+        Write-AppLog "Batch $batchNumber von $batchCount in $([math]::Round($batchWatch.Elapsed.TotalSeconds, 2)) s abgeschlossen" -Level "DEBUG"
+        Write-GuiProgress -Current $currentObject -Total $objectCount -Text "Performance-Test (Batch $batchNumber/$batchCount), Objekte"
+    }
+
+    $totalWatch.Stop()
+    $totalDuration = $totalWatch.Elapsed.TotalSeconds
+    Hide-Progress
+    Show-CreatedObjectCount
+
+    $avgBatchTime = ($batchMetrics | Measure-Object -Property DauerSekunden -Average).Average
+    $objectsPerSecond = if ($totalDuration -gt 0) { $successCount / $totalDuration } else { 0 }
+    $estimate10k = if ($objectsPerSecond -gt 0) { "$([math]::Round(10000 / $objectsPerSecond / 60, 2)) Minuten" } else { "nicht ermittelbar" }
+
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $csvPath = Get-ExportFilePath -FileName "PerformanceTest_$timestamp.csv"
+    $batchMetrics | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+
+    $reportPath = Get-ExportFilePath -FileName "PerformanceTest_$timestamp.txt"
+    $report = @"
+Active-Directory-Performance-Test
+=================================
+Datum: $(Get-Date)
+Ziel-OU: $userOU
+
+Konfiguration:
+- Objekte: $objectCount
 - Batch-Größe: $batchSize
-- Anzahl Batches: $($metrics.BatchCount)
+- Batches: $batchCount
 
 Ergebnisse:
 - Gesamtdauer: $([math]::Round($totalDuration, 2)) Sekunden
-- Erfolgreiche Objekte: $($metrics.SuccessfulObjects)
-- Fehlgeschlagene Objekte: $($metrics.FailedObjects)
-- Durchschnittliche Batch-Zeit: $([math]::Round($avgBatchTime, 2)) Sekunden
+- Erfolgreich: $successCount
+- Fehlgeschlagen: $failedCount
+- Durchschnittliche Batch-Dauer: $([math]::Round($avgBatchTime, 2)) Sekunden
 - Objekte pro Sekunde: $([math]::Round($objectsPerSecond, 2))
+- Hochrechnung für 10.000 Objekte: $estimate10k
 
-Batch-Zeiten:
-$($metrics.BatchTimes | ForEach-Object { "- Batch: $([math]::Round($_, 2)) Sekunden" } | Out-String)
-
-Zusammenfassung:
-Die Performance liegt bei durchschnittlich $([math]::Round($objectsPerSecond, 2)) Objekten pro Sekunde.
-Bei dieser Geschwindigkeit würden 10.000 Objekte etwa $([math]::Round(10000 / $objectsPerSecond / 60, 2)) Minuten benötigen.
+Messwerte je Batch: $csvPath
 "@
-        
-        $report | Out-File -FilePath $reportPath -Encoding UTF8
-        
-        $message = @"
-Performance-Test abgeschlossen:
+    $report | Out-File -FilePath $reportPath -Encoding UTF8
 
-Dauer: $([math]::Round($totalDuration, 2)) Sekunden
-Objekte erstellt: $($metrics.SuccessfulObjects)
-Performance: $([math]::Round($objectsPerSecond, 2)) Objekte/Sekunde
-
-Detaillierter Bericht gespeichert unter:
-$reportPath
-"@
-        
-        [System.Windows.MessageBox]::Show($message, "Performance-Test abgeschlossen", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler beim Performance-Test: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler beim Performance-Test:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
-    }
+    Write-AppLog "Performance-Test abgeschlossen: $successCount erstellt, $failedCount Fehler, $([math]::Round($objectsPerSecond, 2)) Objekte/s" -Level "SUCCESS"
+    [System.Windows.MessageBox]::Show(
+        "Performance-Test abgeschlossen.`n`nDauer: $([math]::Round($totalDuration, 2)) Sekunden`nErstellt: $successCount`nFehler: $failedCount`nLeistung: $([math]::Round($objectsPerSecond, 2)) Objekte/Sekunde`n`nBericht: $reportPath`nMesswerte: $csvPath`n`nDie Testbenutzer können über '🗑️ Löschen' (Erstellte Benutzer verwalten) entfernt werden.",
+        "Performance-Test abgeschlossen", "OK", "Information") | Out-Null
 }
 
 #endregion
 
 #region Sicherheit & Compliance - Implementierung
 
-function Apply-PasswordPolicies {
+function Set-PasswordPolicyTestData {
     <#
     .SYNOPSIS
     Wendet verschiedene Passwort-Richtlinien auf erstellte Benutzer an
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte Anwendung von Passwort-Richtlinien..." -Level "INFO"
-        
-        $simulateHistory = $Global:GuiControls.CheckBoxSimulatePasswordHistory.IsChecked
-        $createLocked = $Global:GuiControls.CheckBoxCreateLockedAccounts.IsChecked
-        $expiredPasswords = $Global:GuiControls.CheckBoxExpiredPasswords.IsChecked
+        Write-AppLog "Starte Anwendung von Passwort-Richtlinien..." -Level "INFO"
+
+        $simulateHistory = $script:GuiControls.CheckBoxSimulatePasswordHistory.IsChecked
+        $createLocked = $script:GuiControls.CheckBoxCreateLockedAccounts.IsChecked
+        $expiredPasswords = $script:GuiControls.CheckBoxExpiredPasswords.IsChecked
         $lockoutRatio = 10  # Slider existiert nicht in der GUI, Standard: 10%
-        
+
         if (-not ($simulateHistory -or $createLocked -or $expiredPasswords)) {
-            Write-Log "Keine Passwort-Richtlinien ausgewählt" -Level "WARN"
+            Write-AppLog "Keine Passwort-Richtlinien ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens eine Passwort-Richtlinie aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
-        if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-            Write-Log "Keine Benutzer vorhanden für Passwort-Richtlinien" -Level "WARN"
+
+        if (-not $script:CreatedUsers -or $script:CreatedUsers.Count -eq 0) {
+            Write-AppLog "Keine Benutzer vorhanden für Passwort-Richtlinien" -Level "WARN"
             [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie folgende Passwort-Richtlinien anwenden?`n`n" +
             "$(if ($simulateHistory) { "- Passwort-Historie simulieren`n" })" +
             "$(if ($createLocked) { "- $lockoutRatio% der Accounts deaktivieren (Sperre simuliert)`n" })" +
             "$(if ($expiredPasswords) { "- Passwörter als abgelaufen markieren`n" })" +
-            "`nBetroffene Benutzer: $($Global:CreatedUsers.Count)",
+            "`nBetroffene Benutzer: $($script:CreatedUsers.Count)",
             "Passwort-Richtlinien anwenden",
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+        if (-not $PSCmdlet.ShouldProcess("Erstellte Benutzer", "Kennwortrichtlinien-Testdaten anwenden")) { return }
+
         Show-Progress -Text "Wende Passwort-Richtlinien an..."
         $processedCount = 0
         $lockedCount = 0
         $expiredCount = 0
         $historyCount = 0
-        
+
         # Berechne Anzahl zu sperrender Accounts
         $accountsToLock = if ($createLocked) {
-            [math]::Ceiling($Global:CreatedUsers.Count * ($lockoutRatio / 100))
+            [math]::Ceiling($script:CreatedUsers.Count * ($lockoutRatio / 100))
         } else { 0 }
-        
-        for ($i = 0; $i -lt $Global:CreatedUsers.Count; $i++) {
-            $user = $Global:CreatedUsers[$i]
-            Update-Progress -Current ($i + 1) -Total $Global:CreatedUsers.Count -Text "Verarbeite Benutzer $($i + 1) von $($Global:CreatedUsers.Count)"
-            
+
+        for ($i = 0; $i -lt $script:CreatedUsers.Count; $i++) {
+            $user = $script:CreatedUsers[$i]
+            Write-GuiProgress -Current ($i + 1) -Total $script:CreatedUsers.Count -Text "Verarbeite Benutzer"
+
             try {
                 # 1. Passwort-Historie simulieren
                 if ($simulateHistory) {
@@ -7386,91 +7327,83 @@ function Apply-PasswordPolicies {
                     # beliebige historische Zeitstempel werden vom DC abgelehnt.
                     Set-ADUser -Identity $user -Replace @{ 'pwdLastSet' = 0 } -ErrorAction Stop
                     Set-ADUser -Identity $user -Replace @{ 'pwdLastSet' = -1 } -ErrorAction Stop
-                    
+
                     $historyCount++
-                    Write-Log "Passwort-Historie für '$user' simuliert" -Level "DEBUG"
+                    Write-AppLog "Passwort-Historie für '$user' simuliert" -Level "DEBUG"
                 }
-                
+
                 # 2. Account sperren (simuliert)
                 if ($createLocked -and $lockedCount -lt $accountsToLock) {
                     # badPwdCount/lockoutTime sind systemverwaltet und können nicht direkt gesetzt werden.
                     # Eine echte Sperre entsteht nur durch fehlgeschlagene Anmeldungen - daher wird der Account deaktiviert.
                     Disable-ADAccount -Identity $user -ErrorAction Stop
                     $lockedCount++
-                    Write-Log "Account '$user' deaktiviert (Sperre simuliert)" -Level "DEBUG"
+                    Write-AppLog "Account '$user' deaktiviert (Sperre simuliert)" -Level "DEBUG"
                 }
-                
+
                 # 3. Passwort als abgelaufen markieren
                 if ($expiredPasswords) {
                     # pwdLastSet = 0 markiert das Passwort als abgelaufen (Änderung bei nächster Anmeldung erforderlich)
                     Set-ADUser -Identity $user -ChangePasswordAtLogon $true -ErrorAction Stop
-                    
+
                     $expiredCount++
-                    Write-Log "Passwort für '$user' als abgelaufen markiert" -Level "DEBUG"
+                    Write-AppLog "Passwort für '$user' als abgelaufen markiert" -Level "DEBUG"
                 }
-                
+
                 $processedCount++
-                
+
             } catch {
-                Write-Log "Fehler bei Passwort-Richtlinien für '$user': $($_.Exception.Message)" -Level "WARN"
+                Write-AppLog "Fehler bei Passwort-Richtlinien für '$user': $($_.Exception.Message)" -Level "WARN"
             }
         }
-        
+
         Hide-Progress
-        
+
         $message = @"
 Passwort-Richtlinien angewendet:
 
 Verarbeitete Benutzer: $processedCount
-$(if ($simulateHistory) { "Passwort-Historie simuliert: $historyCount`n" })$(if ($createLocked) { "Gesperrte Accounts: $lockedCount`n" })$(if ($expiredPasswords) { "Abgelaufene Passwörter: $expiredCount" })
+$(if ($simulateHistory) { "Passwort-Historie simuliert: $historyCount`n" })$(if ($createLocked) { "Gesperrte Konten: $lockedCount`n" })$(if ($expiredPasswords) { "Abgelaufene Passwörter: $expiredCount" })
 
 Die Änderungen können in den Benutzer-Eigenschaften überprüft werden.
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "Passwort-Richtlinien angewendet", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei Passwort-Richtlinien: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei Passwort-Richtlinien: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Anwendung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Create-RBACRoles {
+function New-RBACRole {
     <#
     .SYNOPSIS
     Erstellt RBAC-Rollen und Berechtigungsgruppen
     #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
     try {
-        Write-Log "Starte RBAC-Rollen-Erstellung..." -Level "INFO"
-        
-        $selectedRole = $Global:GuiControls.ComboBoxRBACRoles.SelectedItem
+        Write-AppLog "Starte RBAC-Rollen-Erstellung..." -Level "INFO"
+
+        $selectedRole = $script:GuiControls.ComboBoxRBACRoles.SelectedItem
         if (-not $selectedRole) {
-            Write-Log "Keine RBAC-Rolle ausgewählt" -Level "WARN"
+            Write-AppLog "Keine RBAC-Rolle ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie eine RBAC-Rolle aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
-        # TextBoxRoleCount existiert nicht in der GUI, verwende Default
+
+        # Feste Anzahl Rolleninstanzen je Klick
         $roleCount = 5
-        
-        if ($roleCount -le 0) {
-            Write-Log "Ungültige Anzahl RBAC-Rollen" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie eine gültige Anzahl von Rollen an.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
+
         # Basis-OU
-        $targetOU = $Global:GuiControls.ComboBoxTargetOU.Text
+        $targetOU = $script:GuiControls.ComboBoxTargetOU.Text
         if ([string]::IsNullOrWhiteSpace($targetOU) -or $targetOU -eq "OU=DummyUsers,DC=example,DC=com") {
             $domain = Get-ADDomain
             $targetOU = $domain.DistinguishedName
         }
-        
-        # Erstelle Security Groups OU wenn nötig
-        $testOUs = Ensure-TestOUs -BaseOU $targetOU
-        $groupOU = if ($testOUs["GROUPS"]) { $testOUs["GROUPS"] } else { $targetOU }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie $roleCount RBAC-Rollen für '$($selectedRole.Content)' erstellen?`n`n" +
             "Dies erstellt Sicherheitsgruppen mit entsprechenden Beschreibungen und Strukturen.",
@@ -7478,115 +7411,118 @@ function Create-RBACRoles {
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+        if (-not $PSCmdlet.ShouldProcess($targetOU, "RBAC-Rollengruppen erstellen")) { return }
+        # Erstelle Security Groups OU wenn nötig
+        $testOUs = Initialize-TestOU -BaseOU $targetOU
+        $groupOU = if ($testOUs["GROUPS"]) { $testOUs["GROUPS"] } else { $targetOU }
+
         Show-Progress -Text "Erstelle RBAC-Rollen..."
         $successCount = 0
         $errorCount = 0
-        
+
         # RBAC-Rollen-Definitionen
         $rbacDefinitions = @{
             "Helpdesk Operator" = @{
                 Prefix = "RBAC_Helpdesk"
-                Description = "Helpdesk Operator - Password Reset, Account Unlock"
+                Description = "Helpdesk - Kennwort zurücksetzen, Konto entsperren"
                 Permissions = @("Reset-Password", "Unlock-Account", "Read-User")
                 Tier = 2
             }
             "Server Operator" = @{
                 Prefix = "RBAC_ServerOp"
-                Description = "Server Operator - Server Management"
+                Description = "Server-Operator - Serververwaltung"
                 Permissions = @("Manage-Server", "Remote-Desktop", "Event-Logs")
                 Tier = 1
             }
             "Backup Operator" = @{
                 Prefix = "RBAC_Backup"
-                Description = "Backup Operator - Backup and Restore"
+                Description = "Sicherungs-Operator - Sicherung und Wiederherstellung"
                 Permissions = @("Backup-Files", "Restore-Files", "Manage-VSS")
                 Tier = 1
             }
             "Account Operator" = @{
                 Prefix = "RBAC_AccountOp"
-                Description = "Account Operator - User and Group Management"
+                Description = "Konten-Operator - Benutzer- und Gruppenverwaltung"
                 Permissions = @("Create-User", "Modify-User", "Create-Group", "Modify-Group")
                 Tier = 2
             }
             "Print Operator" = @{
                 Prefix = "RBAC_PrintOp"
-                Description = "Print Operator - Printer Management"
+                Description = "Druck-Operator - Druckerverwaltung"
                 Permissions = @("Manage-Printers", "Manage-Print-Queue", "Install-Drivers")
                 Tier = 2
             }
         }
-        
+
         $roleDefinition = $rbacDefinitions[$selectedRole.Content]
-        
+
         # Erstelle Hierarchische RBAC-Struktur
         for ($i = 1; $i -le $roleCount; $i++) {
             try {
                 # 1. Erstelle Haupt-RBAC-Gruppe
                 $mainGroupName = "$($roleDefinition.Prefix)_$i"
-                $mainGroup = New-ADGroup -Name $mainGroupName `
+                New-ADGroup -Name $mainGroupName `
                     -GroupScope DomainLocal `
                     -GroupCategory Security `
-                    -Description "$($roleDefinition.Description) - Instance $i" `
+                    -Description "$($roleDefinition.Description) - Instanz $i" `
                     -Path $groupOU `
                     -OtherAttributes @{
-                        'info' = "Tier: $($roleDefinition.Tier)`nPermissions: $($roleDefinition.Permissions -join ', ')"
+                        'info' = "Tier: $($roleDefinition.Tier)`nBerechtigungen: $($roleDefinition.Permissions -join ', ')"
                     } `
-                    -PassThru `
                     -ErrorAction Stop
-                
-                $Global:CreatedGroups.Add($mainGroupName)
-                Write-Log "RBAC-Hauptgruppe '$mainGroupName' erstellt" -Level "SUCCESS"
-                
+
+                $script:CreatedGroups.Add($mainGroupName)
+                Write-AppLog "RBAC-Hauptgruppe '$mainGroupName' erstellt" -Level "SUCCESS"
+
                 # 2. Erstelle Permissions-Untergruppen
                 foreach ($permission in $roleDefinition.Permissions) {
                     $permGroupName = "$mainGroupName`_$($permission -replace '-', '')"
-                    
+
                     New-ADGroup -Name $permGroupName `
                         -GroupScope Global `
                         -GroupCategory Security `
-                        -Description "Permission: $permission for $mainGroupName" `
+                        -Description "Berechtigung: $permission für $mainGroupName" `
                         -Path $groupOU `
                         -ErrorAction Stop
-                    
+
                     # Füge Permission-Gruppe zur Haupt-RBAC-Gruppe hinzu
                     Add-ADGroupMember -Identity $mainGroupName -Members $permGroupName -ErrorAction Stop
-                    
-                    $Global:CreatedGroups.Add($permGroupName)
-                    Write-Log "Permission-Gruppe '$permGroupName' erstellt und zugewiesen" -Level "DEBUG"
+
+                    $script:CreatedGroups.Add($permGroupName)
+                    Write-AppLog "Permission-Gruppe '$permGroupName' erstellt und zugewiesen" -Level "DEBUG"
                 }
-                
+
                 # 3. Erstelle Beispiel-Benutzer für diese Rolle
-                if ($Global:CreatedUsers.Count -gt 0) {
+                if ($script:CreatedUsers.Count -gt 0) {
                     # Weise zufällige Benutzer der Rolle zu
-                    $assignCount = [math]::Min(3, $Global:CreatedUsers.Count)
-                    $assignedUsers = $Global:CreatedUsers | Get-Random -Count $assignCount
-                    
+                    $assignCount = [math]::Min(3, $script:CreatedUsers.Count)
+                    $assignedUsers = $script:CreatedUsers | Get-Random -Count $assignCount
+
                     foreach ($user in $assignedUsers) {
                         try {
                             Add-ADGroupMember -Identity $mainGroupName -Members $user -ErrorAction Stop
-                            Write-Log "Benutzer '$user' zu RBAC-Rolle '$mainGroupName' hinzugefügt" -Level "DEBUG"
+                            Write-AppLog "Benutzer '$user' zu RBAC-Rolle '$mainGroupName' hinzugefügt" -Level "DEBUG"
                         } catch {
-                            Write-Log "Fehler beim Zuweisen von '$user' zu '$mainGroupName': $($_.Exception.Message)" -Level "WARN"
+                            Write-AppLog "Fehler beim Zuweisen von '$user' zu '$mainGroupName': $($_.Exception.Message)" -Level "WARN"
                         }
                     }
                 }
-                
+
                 $successCount++
-                
+
             } catch {
-                Write-Log "Fehler beim Erstellen von RBAC-Rolle: $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler beim Erstellen von RBAC-Rolle: $($_.Exception.Message)" -Level "ERROR"
                 $errorCount++
             }
-            
-            Update-Progress -Current $i -Total $roleCount -Text "Erstelle RBAC-Rolle $i von $roleCount..."
+
+            Write-GuiProgress -Current $i -Total $roleCount -Text "Erstelle RBAC-Rollen"
         }
-        
+
         Hide-Progress
-        Update-Statistics
-        
+        Show-CreatedObjectCount
+
         # Erstelle Dokumentation
         $docPath = (Get-ExportFilePath -FileName "RBAC_Structure_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
         $documentation = @"
@@ -7601,16 +7537,16 @@ Struktur:
 - Berechtigungen: $($roleDefinition.Permissions -join ', ')
 
 Erstellte Gruppen:
-$($Global:CreatedGroups | Where-Object { $_ -like "$($roleDefinition.Prefix)*" } | ForEach-Object { "- $_" } | Out-String)
+$($script:CreatedGroups | Where-Object { $_ -like "$($roleDefinition.Prefix)*" } | ForEach-Object { "- $_" } | Out-String)
 
 Hinweise:
 - DomainLocal Gruppen für Ressourcen-Zuweisung
 - Global Gruppen für Berechtigungs-Gruppierung
 - Benutzer können mehreren Rollen zugewiesen werden
 "@
-        
+
         $documentation | Out-File -FilePath $docPath -Encoding UTF8
-        
+
         $message = @"
 RBAC-Rollen erfolgreich erstellt:
 
@@ -7621,148 +7557,17 @@ Fehler: $errorCount
 Die RBAC-Struktur wurde dokumentiert in:
 $docPath
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "RBAC-Rollen erstellt", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei RBAC-Rollen-Erstellung: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei RBAC-Rollen-Erstellung: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
 
-function Create-BitLockerKeys {
-    <#
-    .SYNOPSIS
-    Simuliert BitLocker Recovery Keys für Computer
-    #>
-    try {
-        Write-Log "Starte BitLocker-Key-Simulation..." -Level "INFO"
-        
-        $simulateBitLocker = $Global:GuiControls.CheckBoxSimulateBitLocker.IsChecked
-        $createRecoveryKeys = $Global:GuiControls.CheckBoxRecoveryKeys.IsChecked
-        
-        if (-not ($simulateBitLocker -or $createRecoveryKeys)) {
-            Write-Log "Keine BitLocker-Optionen ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens eine BitLocker-Option aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        if (-not $Global:CreatedComputers -or $Global:CreatedComputers.Count -eq 0) {
-            Write-Log "Keine Computer für BitLocker-Simulation vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Computer erstellt.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie BitLocker-Keys für $($Global:CreatedComputers.Count) Computer simulieren?`n`n" +
-            "Dies erstellt Recovery-Key-Objekte in AD (msFVE-RecoveryInformation).",
-            "BitLocker-Simulation",
-            "YesNo",
-            "Question"
-        )
-        
-        if ($result -ne "Yes") { return }
-        
-        Show-Progress -Text "Simuliere BitLocker-Keys..."
-        $successCount = 0
-        $errorCount = 0
-        
-        # Erstelle BitLocker-Key-Datei
-        $keyFile = (Get-ExportFilePath -FileName "BitLockerKeys_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
-        $keyData = @()
-        
-        for ($i = 0; $i -lt $Global:CreatedComputers.Count; $i++) {
-            $computer = $Global:CreatedComputers[$i]
-            Update-Progress -Current ($i + 1) -Total $Global:CreatedComputers.Count -Text "Erstelle BitLocker-Keys für $computer"
-            
-            try {
-                # Generiere Recovery-Informationen
-                $recoveryGuid = [System.Guid]::NewGuid()
-                $recoveryPassword = Generate-BitLockerRecoveryPassword
-                $recoveryId = $recoveryPassword.Substring(0, 8)
-                
-                # Hole Computer-Objekt
-                $computerObj = Get-ADComputer -Identity $computer -ErrorAction Stop
-                
-                # Erstelle msFVE-RecoveryInformation Objekt
-                $recoveryDN = "CN=$recoveryGuid,CN=$computer,$($computerObj.DistinguishedName.Substring($computerObj.DistinguishedName.IndexOf(',') + 1))"
-                
-                # Simuliere BitLocker-Objekt (vereinfacht, da msFVE-RecoveryInformation spezielle Rechte benötigt)
-                $attributes = @{
-                    'msFVE-RecoveryGuid' = $recoveryGuid.ToString('B')
-                    'msFVE-RecoveryPassword' = $recoveryPassword
-                    'msFVE-VolumeGuid' = [System.Guid]::NewGuid().ToString('B')
-                    'msFVE-RecoveryInformationIdentifier' = "TPM"
-                    'Description' = "BitLocker Recovery Key für $computer"
-                }
-                
-                # Versuche das Objekt zu erstellen (benötigt spezielle Rechte)
-                try {
-                    New-ADObject -Name $recoveryGuid.ToString() `
-                        -Type 'msFVE-RecoveryInformation' `
-                        -Path $computerObj.DistinguishedName `
-                        -OtherAttributes $attributes `
-                        -ErrorAction Stop
-                    
-                    Write-Log "BitLocker Recovery-Objekt für '$computer' erstellt" -Level "SUCCESS"
-                } catch {
-                    # Fallback: Speichere als Computer-Attribut
-                    Set-ADComputer -Identity $computer -Add @{
-                        'info' = "BitLocker Recovery ID: $recoveryId`nRecovery Key gespeichert in: $keyFile"
-                    } -ErrorAction Stop
-                    
-                    Write-Log "BitLocker-Info als Computer-Attribut gespeichert (Fallback)" -Level "INFO"
-                }
-                
-                # Speichere Key-Informationen
-                $keyData += [PSCustomObject]@{
-                    ComputerName = $computer
-                    RecoveryID = $recoveryId
-                    RecoveryPassword = $recoveryPassword
-                    RecoveryGuid = $recoveryGuid
-                    CreatedDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                }
-                
-                $successCount++
-                
-            } catch {
-                Write-Log "Fehler bei BitLocker-Simulation für '$computer': $($_.Exception.Message)" -Level "ERROR"
-                $errorCount++
-            }
-        }
-        
-        # Exportiere Keys
-        if ($keyData.Count -gt 0) {
-            $keyData | Export-Csv -Path $keyFile -NoTypeInformation -Encoding UTF8
-            Write-Log "BitLocker-Keys exportiert nach: $keyFile" -Level "INFO"
-        }
-        
-        Hide-Progress
-        
-        $message = @"
-BitLocker-Simulation abgeschlossen:
-
-Computer verarbeitet: $($Global:CreatedComputers.Count)
-Erfolgreich: $successCount
-Fehler: $errorCount
-
-Recovery-Keys gespeichert in:
-$keyFile
-
-WICHTIG: Diese Datei enthält simulierte Recovery-Keys und sollte sicher aufbewahrt werden!
-"@
-        
-        [System.Windows.MessageBox]::Show($message, "BitLocker-Simulation abgeschlossen", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei BitLocker-Simulation: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Simulation:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
-    }
-}
-
-function Generate-BitLockerRecoveryPassword {
+function Get-BitLockerRecoveryPassword {
     <#
     .SYNOPSIS
     Generiert ein BitLocker-kompatibles Recovery-Passwort
@@ -7779,786 +7584,27 @@ function Generate-BitLockerRecoveryPassword {
 
 #region Erweiterte Features - Implementierung
 
-function Create-DNSEntries {
-    <#
-    .SYNOPSIS
-    Erstellt DNS-Einträge für erstellte Computer
-    #>
-    try {
-        Write-Log "Starte DNS-Einträge-Erstellung..." -Level "INFO"
-        
-        $createDNS = $Global:GuiControls.CheckBoxCreateDNSEntries.IsChecked
-        $createA = $Global:GuiControls.CheckBoxCreateARecords.IsChecked
-        $createCNAME = $Global:GuiControls.CheckBoxCreateCNAME.IsChecked
-        
-        if (-not ($createDNS -or $createA -or $createCNAME)) {
-            Write-Log "Keine DNS-Optionen ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens eine DNS-Option aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        if (-not $Global:CreatedComputers -or $Global:CreatedComputers.Count -eq 0) {
-            Write-Log "Keine Computer für DNS-Einträge vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Computer erstellt.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        # Prüfe ob DNS-Modul verfügbar ist
-        if (-not (Get-Module -ListAvailable -Name DnsServer)) {
-            Write-Log "DNS-Server-Modul nicht verfügbar" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Das DNS-Server PowerShell-Modul ist nicht installiert.`n`nDie DNS-Einträge werden nur simuliert.", "Hinweis", "OK", "Warning")
-            $simulateOnly = $true
-        } else {
-            $simulateOnly = $false
-        }
-        
-        $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie DNS-Einträge für $($Global:CreatedComputers.Count) Computer erstellen?`n`n" +
-            "$(if ($simulateOnly) { 'HINWEIS: DNS-Modul nicht verfügbar - nur Simulation!' })",
-            "DNS-Einträge erstellen",
-            "YesNo",
-            "Question"
-        )
-        
-        if ($result -ne "Yes") { return }
-        
-        $domain = (Get-CachedADDomain).DNSRoot
-        $dnsZone = $domain
-        
-        Show-Progress -Text "Erstelle DNS-Einträge..."
-        $successCount = 0
-        $errorCount = 0
-        $dnsRecords = @()
-        
-        # IP-Adressbereich für Simulation
-        $ipBase = "192.168.1."
-        $ipCounter = 100
-        
-        for ($i = 0; $i -lt $Global:CreatedComputers.Count; $i++) {
-            $computer = $Global:CreatedComputers[$i]
-            $ipAddress = "$ipBase$ipCounter"
-            $ipCounter++
-            
-            Update-Progress -Current ($i + 1) -Total $Global:CreatedComputers.Count -Text "Erstelle DNS-Einträge für $computer"
-            
-            try {
-                # A-Record
-                if ($createA -or $createDNS) {
-                    if (-not $simulateOnly) {
-                        Add-DnsServerResourceRecordA -Name $computer `
-                            -ZoneName $dnsZone `
-                            -IPv4Address $ipAddress `
-                            -CreatePtr `
-                            -ErrorAction Stop
-                        
-                        Write-Log "A-Record für '$computer' mit IP $ipAddress erstellt" -Level "SUCCESS"
-                    }
-                    
-                    $dnsRecords += [PSCustomObject]@{
-                        Type = "A"
-                        Name = $computer
-                        Value = $ipAddress
-                        Zone = $dnsZone
-                    }
-                }
-                
-                # CNAME-Records
-                if ($createCNAME) {
-                    $aliases = @("www", "mail", "ftp")
-                    foreach ($alias in $aliases) {
-                        $cname = "$alias-$computer"
-                        
-                        if (-not $simulateOnly) {
-                            Add-DnsServerResourceRecordCName -Name $cname `
-                                -ZoneName $dnsZone `
-                                -HostNameAlias "$computer.$dnsZone" `
-                                -ErrorAction Stop
-                        }
-                        
-                        $dnsRecords += [PSCustomObject]@{
-                            Type = "CNAME"
-                            Name = $cname
-                            Value = "$computer.$dnsZone"
-                            Zone = $dnsZone
-                        }
-                        
-                        Write-Log "CNAME '$cname' -> '$computer.$dnsZone' erstellt" -Level "DEBUG"
-                    }
-                }
-                
-                # PTR-Record (Reverse DNS)
-                if ($createA -or $createDNS) {
-                    $reverseZone = "1.168.192.in-addr.arpa"
-                    $ptrName = $ipAddress.Split('.')[-1]
-                    
-                    if (-not $simulateOnly) {
-                        Add-DnsServerResourceRecordPtr -Name $ptrName `
-                            -ZoneName $reverseZone `
-                            -PtrDomainName "$computer.$dnsZone" `
-                            -ErrorAction SilentlyContinue
-                    }
-                    
-                    $dnsRecords += [PSCustomObject]@{
-                        Type = "PTR"
-                        Name = "$ptrName.$reverseZone"
-                        Value = "$computer.$dnsZone"
-                        Zone = $reverseZone
-                    }
-                }
-                
-                $successCount++
-                
-            } catch {
-                Write-Log "Fehler bei DNS-Einträgen für '$computer': $($_.Exception.Message)" -Level "ERROR"
-                $errorCount++
-            }
-        }
-        
-        # Exportiere DNS-Records
-        $dnsFile = (Get-ExportFilePath -FileName "DNS_Records_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
-        $dnsRecords | Export-Csv -Path $dnsFile -NoTypeInformation -Encoding UTF8
-        
-        Hide-Progress
-        
-        $message = @"
-DNS-Einträge $(if ($simulateOnly) { "simuliert" } else { "erstellt"}):
-
-Computer verarbeitet: $($Global:CreatedComputers.Count)
-Erfolgreich: $successCount
-Fehler: $errorCount
-
-DNS-Records dokumentiert in:
-$dnsFile
-
-Erstellte Record-Typen:
-$(if ($createA -or $createDNS) { "- A-Records mit IPs im Bereich $ipBase*`n" })$(if ($createCNAME) { "- CNAME-Aliase (www, mail, ftp)`n" })$(if ($createA -or $createDNS) { "- PTR-Records für Reverse-DNS" })
-"@
-        
-        [System.Windows.MessageBox]::Show($message, "DNS-Einträge erstellt", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei DNS-Einträge-Erstellung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
-    }
-}
-
-function Simulate-Migration {
-    <#
-    .SYNOPSIS
-    Simuliert eine Domänenmigration mit SID-History
-    #>
-    try {
-        Write-Log "Starte Migrations-Simulation..." -Level "INFO"
-        
-        $sidHistory = $Global:GuiControls.CheckBoxSIDHistory.IsChecked
-        $trustRelationships = $Global:GuiControls.CheckBoxTrustRelationships.IsChecked
-        $sourceDomain = $Global:GuiControls.TextBoxSourceDomain.Text
-        
-        if (-not ($sidHistory -or $trustRelationships)) {
-            Write-Log "Keine Migrations-Optionen ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens eine Migrations-Option aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        if ([string]::IsNullOrWhiteSpace($sourceDomain)) {
-            Write-Log "Keine Quell-Domäne angegeben" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte geben Sie eine Quell-Domäne an.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        if (-not $Global:CreatedUsers -or $Global:CreatedUsers.Count -eq 0) {
-            Write-Log "Keine Benutzer für Migration vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Benutzer erstellt.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie eine Migration von '$sourceDomain' simulieren?`n`n" +
-            "Betroffene Benutzer: $($Global:CreatedUsers.Count)`n" +
-            "$(if ($sidHistory) { '- SID-History wird simuliert`n' })" +
-            "$(if ($trustRelationships) { '- Trust-Beziehungen werden dokumentiert' })",
-            "Migration simulieren",
-            "YesNo",
-            "Question"
-        )
-        
-        if ($result -ne "Yes") { return }
-        
-        Show-Progress -Text "Simuliere Migration..."
-        $migratedCount = 0
-        $errorCount = 0
-        
-        # Erstelle Migrations-Dokumentation
-        $migrationData = @()
-        
-        for ($i = 0; $i -lt $Global:CreatedUsers.Count; $i++) {
-            $user = $Global:CreatedUsers[$i]
-            Update-Progress -Current ($i + 1) -Total $Global:CreatedUsers.Count -Text "Migriere Benutzer $user"
-            
-            try {
-                # Hole aktuellen Benutzer
-                $adUser = Get-ADUser -Identity $user -Properties * -ErrorAction Stop
-                
-                # Simuliere SID-History
-                if ($sidHistory) {
-                    # Generiere eine Beispiel-SID aus der alten Domäne
-                    $oldSid = "S-1-5-21-$(Get-Random -Minimum 100000000 -Maximum 999999999)-$(Get-Random -Minimum 100000000 -Maximum 999999999)-$(Get-Random -Minimum 100000000 -Maximum 999999999)-$(Get-Random -Minimum 1000 -Maximum 9999)"
-                    
-                    # SIDHistory kann nur mit speziellen Rechten gesetzt werden
-                    # Wir simulieren es durch ein Custom-Attribut
-                    Set-ADUser -Identity $user -Add @{
-                        'adminDescription' = "Migrated from $sourceDomain | Original SID: $oldSid"
-                        'extensionAttribute1' = $sourceDomain
-                        'extensionAttribute2' = $oldSid
-                    } -ErrorAction Stop
-                    
-                    Write-Log "SID-History für '$user' simuliert: $oldSid" -Level "DEBUG"
-                }
-                
-                # Dokumentiere Migration
-                $migrationData += [PSCustomObject]@{
-                    SourceDomain = $sourceDomain
-                    TargetDomain = (Get-CachedADDomain).DNSRoot
-                    UserName = $user
-                    OriginalSID = $oldSid
-                    NewSID = $adUser.SID.Value
-                    MigrationDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                    Status = "Success"
-                }
-                
-                $migratedCount++
-                
-            } catch {
-                Write-Log "Fehler bei Migration von '$user': $($_.Exception.Message)" -Level "ERROR"
-                $migrationData += [PSCustomObject]@{
-                    SourceDomain = $sourceDomain
-                    TargetDomain = (Get-CachedADDomain).DNSRoot
-                    UserName = $user
-                    OriginalSID = "N/A"
-                    NewSID = "N/A"
-                    MigrationDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                    Status = "Failed: $($_.Exception.Message)"
-                }
-                $errorCount++
-            }
-        }
-        
-        # Erstelle Trust-Dokumentation
-        $trustDoc = ""
-        if ($trustRelationships) {
-            $trustDoc = @"
-
-Trust-Beziehungen Dokumentation
-================================
-Quell-Domäne: $sourceDomain
-Ziel-Domäne: $((Get-CachedADDomain).DNSRoot)
-
-Empfohlene Trust-Konfiguration:
-- Trust-Typ: Forest Trust (Transitive)
-- Trust-Richtung: Bidirektional
-- SID-Filtering: Deaktiviert (für SID-History)
-- Selective Authentication: Aktiviert
-
-Firewall-Regeln erforderlich:
-- TCP 445 (SMB)
-- TCP 135 (RPC Endpoint Mapper)
-- TCP 49152-65535 (RPC Dynamic Ports)
-- TCP/UDP 389 (LDAP)
-- TCP 636 (LDAPS)
-- TCP/UDP 88 (Kerberos)
-- TCP/UDP 464 (Kerberos Password Change)
-
-DNS-Konfiguration:
-- Conditional Forwarders für beide Domänen
-- Suffix Search List Update
-"@
-        }
-        
-        # Exportiere Migrations-Bericht
-        $reportPath = (Get-ExportFilePath -FileName "Migration_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
-        $report = @"
-Migrations-Simulations-Bericht
-==============================
-Datum: $(Get-Date)
-Quell-Domäne: $sourceDomain
-Ziel-Domäne: $((Get-CachedADDomain).DNSRoot)
-
-Migrations-Statistik:
-- Benutzer migriert: $migratedCount
-- Fehler: $errorCount
-- Gesamt: $($Global:CreatedUsers.Count)
-
-$trustDoc
-
-Hinweise:
-- SID-History wurde durch Custom-Attribute simuliert
-- Echte SID-History erfordert Domain Admin Rechte und Trust
-- Gruppen-Mitgliedschaften müssen separat migriert werden
-"@
-        
-        $report | Out-File -FilePath $reportPath -Encoding UTF8
-        
-        # Exportiere Details
-        $csvPath = (Get-ExportFilePath -FileName "Migration_Details_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
-        $migrationData | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-        
-        Hide-Progress
-        
-        $message = @"
-Migration erfolgreich simuliert:
-
-Quell-Domäne: $sourceDomain
-Migrierte Benutzer: $migratedCount
-Fehler: $errorCount
-
-Berichte erstellt:
-- $reportPath
-- $csvPath
-"@
-        
-        [System.Windows.MessageBox]::Show($message, "Migration simuliert", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei Migrations-Simulation: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Simulation:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
-    }
-}
-
-function Create-KerberosTests {
-    <#
-    .SYNOPSIS
-    Erstellt Kerberos-Test-Konfigurationen mit SPNs
-    #>
-    try {
-        Write-Log "Starte Kerberos-Test-Erstellung..." -Level "INFO"
-        
-        $createSPNs = $Global:GuiControls.CheckBoxCreateSPNs.IsChecked
-        $kerberosConstraints = $Global:GuiControls.CheckBoxKerberosConstraints.IsChecked
-        $serviceType = $Global:GuiControls.ComboBoxKerberosService.SelectedItem
-        
-        if (-not ($createSPNs -or $kerberosConstraints)) {
-            Write-Log "Keine Kerberos-Optionen ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens eine Kerberos-Option aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        if (-not $serviceType) {
-            Write-Log "Kein Service-Typ ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie einen Service-Typ aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        if ($Global:CreatedServiceAccounts.Count -eq 0 -and $Global:CreatedComputers.Count -eq 0) {
-            Write-Log "Keine Service-Accounts oder Computer für Kerberos-Tests vorhanden" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Es wurden noch keine Service-Accounts oder Computer erstellt.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        $result = [System.Windows.MessageBox]::Show(
-            "Möchten Sie Kerberos-Tests für '$($serviceType.Content)' erstellen?`n`n" +
-            "$(if ($createSPNs) { '- Service Principal Names werden erstellt`n' })" +
-            "$(if ($kerberosConstraints) { '- Kerberos-Delegation wird konfiguriert' })",
-            "Kerberos-Tests erstellen",
-            "YesNo",
-            "Question"
-        )
-        
-        if ($result -ne "Yes") { return }
-        
-        Show-Progress -Text "Erstelle Kerberos-Test-Konfiguration..."
-        $successCount = 0
-        $errorCount = 0
-        $spnData = @()
-        
-        # Service-Typ Mapping
-        $servicePrefix = switch ($serviceType.Content) {
-            "HTTP" { "HTTP" }
-            "SQL" { "MSSQLSvc" }
-            "LDAP" { "ldap" }
-            "HOST" { "HOST" }
-        }
-        
-        # Verwende Service-Accounts wenn vorhanden, sonst Computer
-        $targetAccounts = if ($Global:CreatedServiceAccounts.Count -gt 0) {
-            $Global:CreatedServiceAccounts
-        } else {
-            $Global:CreatedComputers | Select-Object -First 10
-        }
-        
-        $domain = (Get-CachedADDomain).DNSRoot
-        $totalAccounts = $targetAccounts.Count
-        
-        for ($i = 0; $i -lt $totalAccounts; $i++) {
-            $account = $targetAccounts[$i]
-            Update-Progress -Current ($i + 1) -Total $totalAccounts -Text "Konfiguriere Kerberos für $account"
-            
-            try {
-                # Bestimme Account-Typ
-                $isComputer = $account -like "*$"
-                $accountObj = if ($isComputer) {
-                    Get-ADComputer -Identity $account -Properties * -ErrorAction Stop
-                } else {
-                    Get-ADUser -Identity $account -Properties * -ErrorAction Stop
-                }
-                
-                # 1. Erstelle SPNs
-                if ($createSPNs) {
-                    $spns = @()
-                    
-                    switch ($serviceType.Content) {
-                        "HTTP" {
-                            $spns += "$servicePrefix/$account"
-                            $spns += "$servicePrefix/$account.$domain"
-                            $spns += "$servicePrefix/$account.${domain}:80"
-                            $spns += "$servicePrefix/$account.${domain}:443"
-                        }
-                        "SQL" {
-                            $spns += "$servicePrefix/$account.$domain"
-                            $spns += "$servicePrefix/$account.${domain}:1433"
-                        }
-                        "LDAP" {
-                            $spns += "$servicePrefix/$account.$domain"
-                            $spns += "$servicePrefix/$account.$domain/$domain"
-                        }
-                        "HOST" {
-                            $spns += "$servicePrefix/$account"
-                            $spns += "$servicePrefix/$account.$domain"
-                        }
-                    }
-                    
-                    foreach ($spn in $spns) {
-                        try {
-                            if ($isComputer) {
-                                Set-ADComputer -Identity $account -Add @{servicePrincipalName=$spn} -ErrorAction Stop
-                            } else {
-                                Set-ADUser -Identity $account -Add @{servicePrincipalName=$spn} -ErrorAction Stop
-                            }
-                            
-                            $spnData += [PSCustomObject]@{
-                                Account = $account
-                                AccountType = if ($isComputer) { "Computer" } else { "User" }
-                                SPN = $spn
-                                ServiceType = $serviceType.Content
-                                Status = "Created"
-                            }
-                            
-                            Write-Log "SPN '$spn' zu '$account' hinzugefügt" -Level "DEBUG"
-                        } catch {
-                            if ($_.Exception.Message -notlike "*already exists*") {
-                                throw
-                            }
-                            Write-Log "SPN '$spn' existiert bereits" -Level "DEBUG"
-                        }
-                    }
-                }
-                
-                # 2. Konfiguriere Kerberos-Delegation
-                if ($kerberosConstraints) {
-                    # Aktiviere Kerberos-Delegation
-                    $delegationSettings = @{
-                        'TrustedForDelegation' = $true
-                        'AccountNotDelegated' = $false
-                    }
-                    
-                    # Setze msDS-AllowedToDelegateTo für constrained delegation
-                    if ($serviceType.Content -eq "HTTP") {
-                        $delegationSettings['msDS-AllowedToDelegateTo'] = @(
-                            "HTTP/webserver.$domain",
-                            "HTTP/webserver"
-                        )
-                    }
-                    
-                    if ($isComputer) {
-                        Set-ADComputer -Identity $account -Replace $delegationSettings -ErrorAction Stop
-                    } else {
-                        Set-ADUser -Identity $account -Replace $delegationSettings -ErrorAction Stop
-                    }
-                    
-                    Write-Log "Kerberos-Delegation für '$account' aktiviert" -Level "DEBUG"
-                }
-                
-                $successCount++
-                
-            } catch {
-                Write-Log "Fehler bei Kerberos-Konfiguration für '$account': $($_.Exception.Message)" -Level "ERROR"
-                $errorCount++
-            }
-        }
-        
-        # Exportiere SPN-Dokumentation
-        $spnFile = (Get-ExportFilePath -FileName "Kerberos_SPNs_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
-        $spnData | Export-Csv -Path $spnFile -NoTypeInformation -Encoding UTF8
-        
-        # Erstelle Test-Anleitung
-        $testGuide = (Get-ExportFilePath -FileName "Kerberos_TestGuide_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
-        $guide = @"
-Kerberos Test-Anleitung
-=======================
-Datum: $(Get-Date)
-Service-Typ: $($serviceType.Content)
-
-Erstellte Konfiguration:
-- Accounts konfiguriert: $successCount
-- SPNs erstellt: $($spnData.Count)
-- Delegation aktiviert: $(if ($kerberosConstraints) { "Ja" } else { "Nein" })
-
-Test-Befehle:
-
-1. SPN-Abfrage:
-   setspn -L <accountname>
-   setspn -Q $servicePrefix/*
-
-2. Kerberos-Ticket-Test:
-   klist purge
-   klist get $servicePrefix/$account.$domain
-
-3. Delegation-Test:
-   Get-ADUser <accountname> -Properties TrustedForDelegation,msDS-AllowedToDelegateTo
-
-4. Troubleshooting:
-   - Event Log: System und Security
-   - Kerberos Logging aktivieren: ksetup /setrealm
-   - Network Trace: netsh trace start scenario=NetConnection,InternetClient
-
-Häufige Probleme:
-- Doppelte SPNs
-- Falsche DNS-Auflösung
-- Zeit-Synchronisation (> 5 Min Abweichung)
-- Verschlüsselungstypen nicht unterstützt
-"@
-        
-        $guide | Out-File -FilePath $testGuide -Encoding UTF8
-        
-        Hide-Progress
-        
-        $message = @"
-Kerberos-Tests erfolgreich erstellt:
-
-Service-Typ: $($serviceType.Content)
-Konfigurierte Accounts: $successCount
-Fehler: $errorCount
-
-Dokumentation:
-- SPNs: $spnFile
-- Test-Anleitung: $testGuide
-"@
-        
-        [System.Windows.MessageBox]::Show($message, "Kerberos-Tests erstellt", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei Kerberos-Test-Erstellung: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Erstellung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
-    }
-}
-
-function Document-FSMORoles {
-    <#
-    .SYNOPSIS
-    Dokumentiert FSMO-Rollen und Domänen-Informationen
-    #>
-    try {
-        Write-Log "Starte FSMO-Dokumentation..." -Level "INFO"
-        
-        $documentFSMO = $Global:GuiControls.CheckBoxDocumentFSMO.IsChecked
-        $exportDomainInfo = $Global:GuiControls.CheckBoxExportDomainInfo.IsChecked
-        
-        if (-not ($documentFSMO -or $exportDomainInfo)) {
-            Write-Log "Keine Dokumentations-Optionen ausgewählt" -Level "WARN"
-            [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens eine Dokumentations-Option aus.", "Hinweis", "OK", "Warning")
-            return
-        }
-        
-        Show-Progress -Text "Erstelle Dokumentation..." -Value 0
-        
-        $docPath = (Get-ExportFilePath -FileName "AD_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
-        $documentation = @"
-Active Directory Dokumentation
-==============================
-Erstellt am: $(Get-Date)
-Erstellt von: $env:USERNAME
-"@
-        
-        # 1. FSMO-Rollen dokumentieren
-        if ($documentFSMO) {
-            Update-Progress -Current 25 -Total 100 -Text "Dokumentiere FSMO-Rollen..."
-            
-            try {
-                $forest = Get-ADForest
-                $domain = Get-ADDomain
-                
-                $documentation += @"
-
-FSMO-Rollen (Flexible Single Master Operations)
-===============================================
-
-Forest-Level FSMO-Rollen:
-------------------------
-1. Schema Master:
-   - Aktueller Inhaber: $($forest.SchemaMaster)
-   - Beschreibung: Verwaltet Schema-Änderungen
-   
-2. Domain Naming Master:
-   - Aktueller Inhaber: $($forest.DomainNamingMaster)
-   - Beschreibung: Verwaltet Domänen-Hinzufügungen/-Entfernungen
-
-Domain-Level FSMO-Rollen:
--------------------------
-3. PDC Emulator:
-   - Aktueller Inhaber: $($domain.PDCEmulator)
-   - Beschreibung: Zeitquelle, Passwort-Änderungen, Gruppen-Richtlinien
-   
-4. RID Master:
-   - Aktueller Inhaber: $($domain.RIDMaster)
-   - Beschreibung: Verteilt RID-Pools an Domain Controller
-   
-5. Infrastructure Master:
-   - Aktueller Inhaber: $($domain.InfrastructureMaster)
-   - Beschreibung: Cross-Domain Objektreferenzen
-
-FSMO-Rollen Übertragung:
-------------------------
-PowerShell-Befehle:
-- Move-ADDirectoryServerOperationMasterRole -Identity <TargetDC> -OperationMasterRole <Role>
-
-Notfall-Übernahme (Seize):
-- Bei Ausfall des aktuellen Inhabers
-- NUR als letzte Option verwenden!
-"@
-                
-                Write-Log "FSMO-Rollen erfolgreich dokumentiert" -Level "SUCCESS"
-            } catch {
-                Write-Log "Fehler bei FSMO-Dokumentation: $($_.Exception.Message)" -Level "ERROR"
-                $documentation += "`n`nFehler bei FSMO-Dokumentation: $($_.Exception.Message)"
-            }
-        }
-        
-        # 2. Domänen-Informationen exportieren
-        if ($exportDomainInfo) {
-            Update-Progress -Current 50 -Total 100 -Text "Exportiere Domänen-Informationen..."
-            
-            try {
-                $domain = Get-ADDomain
-                $forest = Get-ADForest
-                $dcs = Get-ADDomainController -Filter *
-                
-                $documentation += @"
-
-Domänen-Informationen
-=====================
-
-Forest-Informationen:
---------------------
-- Forest Name: $($forest.Name)
-- Forest Mode: $($forest.ForestMode)
-- Schema Version: $((Get-ADObject (Get-ADRootDSE).schemaNamingContext -Properties objectVersion).objectVersion)
-- Domains: $($forest.Domains -join ', ')
-- Global Catalogs: $($forest.GlobalCatalogs -join ', ')
-- Sites: $($forest.Sites -join ', ')
-
-Domain-Informationen:
---------------------
-- Domain Name: $($domain.Name)
-- NetBIOS Name: $($domain.NetBIOSName)
-- Domain Mode: $($domain.DomainMode)
-- Domain SID: $($domain.DomainSID)
-- DNS Root: $($domain.DNSRoot)
-- Distinguished Name: $($domain.DistinguishedName)
-
-Domain Controller:
-------------------
-"@
-                
-                foreach ($dc in $dcs) {
-                    $documentation += @"
-
-$($dc.Name):
-- IP-Adresse: $($dc.IPv4Address)
-- OS Version: $($dc.OperatingSystem)
-- Ist Global Catalog: $($dc.IsGlobalCatalog)
-- Ist Read-Only: $($dc.IsReadOnly)
-- Site: $($dc.Site)
-"@
-                }
-                
-                # Erstelle detaillierte DC-Liste
-                $dcFile = (Get-ExportFilePath -FileName "DomainControllers_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
-                $dcs | Select-Object Name, IPv4Address, OperatingSystem, IsGlobalCatalog, IsReadOnly, Site | 
-                    Export-Csv -Path $dcFile -NoTypeInformation -Encoding UTF8
-                
-                Write-Log "Domänen-Informationen erfolgreich exportiert" -Level "SUCCESS"
-            } catch {
-                Write-Log "Fehler beim Export der Domänen-Informationen: $($_.Exception.Message)" -Level "ERROR"
-                $documentation += "`n`nFehler beim Export: $($_.Exception.Message)"
-            }
-        }
-        
-        # 3. Test-Objekt-Statistiken hinzufügen
-        Update-Progress -Current 75 -Total 100 -Text "Erstelle Statistiken..."
-        
-        $documentation += @"
-
-Test-Objekt-Statistiken
-========================
-- Erstellte Benutzer: $($Global:CreatedUsers.Count)
-- Erstellte Gruppen: $($Global:CreatedGroups.Count)
-- Erstellte Computer: $($Global:CreatedComputers.Count)
-- Erstellte OUs: $($Global:CreatedOUs.Count)
-- Erstellte Service-Accounts: $($Global:CreatedServiceAccounts.Count)
-- Gesamt: $($Global:CreatedUsers.Count + $Global:CreatedGroups.Count + $Global:CreatedComputers.Count + $Global:CreatedOUs.Count + $Global:CreatedServiceAccounts.Count)
-
-Hinweise zur Bereinigung:
--------------------------
-- Verwenden Sie die Schnellzugriff-Funktion 'Aufräumen'
-- Oder löschen Sie Objekte einzeln über die jeweiligen Lösch-Funktionen
-- Erstellen Sie vor dem Löschen ein Backup!
-"@
-        
-        # Speichere Dokumentation
-        $documentation | Out-File -FilePath $docPath -Encoding UTF8
-        
-        Hide-Progress
-        
-        $message = @"
-Dokumentation erfolgreich erstellt:
-
-$(if ($documentFSMO) { "- FSMO-Rollen dokumentiert`n" })$(if ($exportDomainInfo) { "- Domänen-Informationen exportiert`n" })
-Hauptdokument: $docPath
-$(if ($exportDomainInfo -and $dcFile) { "DC-Liste: $dcFile" })
-"@
-        
-        [System.Windows.MessageBox]::Show($message, "Dokumentation erstellt", "OK", "Information")
-        
-    } catch {
-        Hide-Progress
-        Write-Log "Fehler bei Dokumentation: $($_.Exception.Message)" -Level "ERROR"
-        [System.Windows.MessageBox]::Show("Fehler bei der Dokumentation:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
-    }
-}
-
-function Create-AdvancedFeatures {
+function Invoke-AdvancedFeature {
     <#
     .SYNOPSIS
     Führt erweiterte Features für Test-Umgebungen aus
-    
+
     .DESCRIPTION
     Erstellt DNS-Einträge, Service Principal Names (SPNs) und dokumentiert FSMO-Rollen
     #>
     try {
-        Write-Log "Starte Ausführung erweiterter Features..." -Level "INFO"
-        
-        $createDNS = $Global:GuiControls.CheckBoxCreateDNSEntries.IsChecked
-        $createSPNs = $Global:GuiControls.CheckBoxCreateSPNs.IsChecked
-        $documentFSMO = $Global:GuiControls.CheckBoxDocumentFSMO.IsChecked
-        
+        Write-AppLog "Starte Ausführung erweiterter Features..." -Level "INFO"
+
+        $createDNS = $script:GuiControls.CheckBoxCreateDNSEntries.IsChecked
+        $createSPNs = $script:GuiControls.CheckBoxCreateSPNs.IsChecked
+        $documentFSMO = $script:GuiControls.CheckBoxDocumentFSMO.IsChecked
+
         if (-not ($createDNS -or $createSPNs -or $documentFSMO)) {
-            Write-Log "Keine erweiterten Features ausgewählt" -Level "WARN"
+            Write-AppLog "Keine erweiterten Features ausgewählt" -Level "WARN"
             [System.Windows.MessageBox]::Show("Bitte wählen Sie mindestens ein erweitertes Feature aus.", "Hinweis", "OK", "Warning")
             return
         }
-        
+
         $result = [System.Windows.MessageBox]::Show(
             "Möchten Sie folgende erweiterte Features ausführen?`n`n" +
             "$(if ($createDNS) { "- DNS-Einträge erstellen (simuliert)`n" })" +
@@ -8569,27 +7615,27 @@ function Create-AdvancedFeatures {
             "YesNo",
             "Question"
         )
-        
+
         if ($result -ne "Yes") { return }
-        
+
         Show-Progress -Text "Führe erweiterte Features aus..." -Value 0
         $successCount = 0
         $errorCount = 0
         $reportData = @()
-        
+
         # 1. DNS-Einträge erstellen (simuliert)
-        if ($createDNS -and $Global:CreatedComputers.Count -gt 0) {
-            Update-Progress -Current 1 -Total 3 -Text "Erstelle DNS-Einträge..."
-            
+        if ($createDNS -and $script:CreatedComputers.Count -gt 0) {
+            Write-GuiProgress -Current 1 -Total 3 -Text "Erstelle DNS-Einträge..."
+
             $dnsFile = (Get-ExportFilePath -FileName "DNS_Entries_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
             $dnsEntries = @()
             $domain = (Get-CachedADDomain).DNSRoot
             $ipBase = "10.0.1."
-            
-            for ($i = 0; $i -lt $Global:CreatedComputers.Count; $i++) {
-                $computer = $Global:CreatedComputers[$i]
+
+            for ($i = 0; $i -lt $script:CreatedComputers.Count; $i++) {
+                $computer = $script:CreatedComputers[$i]
                 $ip = "$ipBase$(100 + $i)"
-                
+
                 # A-Record
                 $dnsEntries += [PSCustomObject]@{
                     RecordType = "A"
@@ -8599,7 +7645,7 @@ function Create-AdvancedFeatures {
                     TTL = 3600
                     Zone = $domain
                 }
-                
+
                 # PTR-Record
                 $octets = $ip.Split('.')
                 $ptrName = "$($octets[3]).$($octets[2]).$($octets[1]).$($octets[0]).in-addr.arpa"
@@ -8611,45 +7657,45 @@ function Create-AdvancedFeatures {
                     TTL = 3600
                     Zone = "$($octets[2]).$($octets[1]).$($octets[0]).in-addr.arpa"
                 }
-                
-                Write-Log "DNS-Einträge für '$computer' erstellt (IP: $ip)" -Level "DEBUG"
+
+                Write-AppLog "DNS-Einträge für '$computer' erstellt (IP: $ip)" -Level "DEBUG"
                 $successCount++
             }
-            
+
             $dnsEntries | Export-Csv -Path $dnsFile -NoTypeInformation -Encoding UTF8
             $reportData += "DNS-Einträge: $dnsFile ($($dnsEntries.Count) Einträge)"
         }
-        
+
         # 2. Service Principal Names erstellen
-        if ($createSPNs -and $Global:CreatedServiceAccounts.Count -gt 0) {
-            Update-Progress -Current 2 -Total 3 -Text "Erstelle Service Principal Names..."
-            
+        if ($createSPNs -and $script:CreatedServiceAccounts.Count -gt 0) {
+            Write-GuiProgress -Current 2 -Total 3 -Text "Erstelle Service Principal Names..."
+
             $spnFile = (Get-ExportFilePath -FileName "SPNs_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv")
             $spnData = New-Object System.Collections.Generic.List[object]
             $domain = (Get-CachedADDomain).DNSRoot
-            
-            foreach ($serviceAccount in $Global:CreatedServiceAccounts) {
+
+            foreach ($serviceAccount in $script:CreatedServiceAccounts) {
                 try {
-                    # Hole Service-Account-Details
-                    $account = Get-ADUser -Identity $serviceAccount -ErrorAction Stop
-                    
-                    # Erstelle verschiedene SPNs basierend auf Service-Typ
+                    # Existenz des Dienstkontos prüfen (wirft bei gelöschtem Konto)
+                    $null = Get-ADUser -Identity $serviceAccount -ErrorAction Stop
+
+                    # Erstelle verschiedene SPNs basierend auf Dienst-Typ
                     # (Accounts heißen svc_sql_####, svc_iis_#### usw.; Hostname je Account eindeutig, damit keine doppelten SPNs entstehen)
                     $spns = New-Object System.Collections.Generic.List[string]
                     $hostLabel = $serviceAccount -replace '_', '-'
-                    
-                    # SQL-Server-Service-Accounts
+
+                    # SQL-Server-Dienstkonten
                     if ($serviceAccount -like "svc_sql*") {
                         $spns.Add("MSSQLSvc/$hostLabel.$domain")
                         $spns.Add("MSSQLSvc/$hostLabel.${domain}:1433")
                     }
-                    # IIS-/Web-Service-Accounts
+                    # IIS-/Web-Dienstkonten
                     elseif ($serviceAccount -like "svc_iis*" -or $serviceAccount -like "svc_web*") {
                         $spns.Add("HTTP/$hostLabel.$domain")
                         $spns.Add("HTTP/$hostLabel.${domain}:80")
                         $spns.Add("HTTP/$hostLabel.${domain}:443")
                     }
-                    # Sonstige Service-Accounts (generisch)
+                    # Sonstige Dienstkonten (generisch)
                     elseif ($serviceAccount -like "svc_*") {
                         $spns.Add("HOST/$hostLabel.$domain")
                     }
@@ -8657,20 +7703,20 @@ function Create-AdvancedFeatures {
                     else {
                         $spns.Add("HOST/$hostLabel.$domain")
                     }
-                    
+
                     # SPNs zum Account hinzufügen
                     foreach ($spn in $spns) {
                         try {
                             Set-ADUser -Identity $serviceAccount -Add @{servicePrincipalName=$spn} -ErrorAction Stop
-                            
+
                             $spnData.Add([PSCustomObject]@{
                                 Account = $serviceAccount
                                 SPN = $spn
                                 Status = "Created"
                                 Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
                             })
-                            
-                            Write-Log "SPN '$spn' zu Service-Account '$serviceAccount' hinzugefügt" -Level "DEBUG"
+
+                            Write-AppLog "SPN '$spn' zu Dienstkonto '$serviceAccount' hinzugefügt" -Level "DEBUG"
                         } catch {
                             $spnData.Add([PSCustomObject]@{
                                 Account = $serviceAccount
@@ -8681,29 +7727,29 @@ function Create-AdvancedFeatures {
                             $errorCount++
                         }
                     }
-                    
+
                     $successCount++
-                    
+
                 } catch {
-                    Write-Log "Fehler bei SPN-Erstellung für '$serviceAccount': $($_.Exception.Message)" -Level "ERROR"
+                    Write-AppLog "Fehler bei SPN-Erstellung für '$serviceAccount': $($_.Exception.Message)" -Level "ERROR"
                     $errorCount++
                 }
             }
-            
+
             $spnData | Export-Csv -Path $spnFile -NoTypeInformation -Encoding UTF8
             $reportData += "SPNs: $spnFile ($($spnData.Count) SPNs)"
         }
-        
+
         # 3. FSMO-Rollen dokumentieren
         if ($documentFSMO) {
-            Update-Progress -Current 3 -Total 3 -Text "Dokumentiere FSMO-Rollen..."
-            
+            Write-GuiProgress -Current 3 -Total 3 -Text "Dokumentiere FSMO-Rollen..."
+
             $fsmoFile = (Get-ExportFilePath -FileName "FSMO_Documentation_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt")
-            
+
             try {
                 $forest = Get-ADForest
                 $domain = Get-ADDomain
-                
+
                 $fsmoDoc = @"
 FSMO-Rollen Dokumentation
 =========================
@@ -8728,19 +7774,19 @@ Domain-Informationen:
 - NetBIOS: $($domain.NetBIOSName)
 - Mode: $($domain.DomainMode)
 "@
-                
+
                 $fsmoDoc | Out-File -FilePath $fsmoFile -Encoding UTF8
                 $reportData += "FSMO-Dokumentation: $fsmoFile"
                 $successCount++
-                
+
             } catch {
-                Write-Log "Fehler bei FSMO-Dokumentation: $($_.Exception.Message)" -Level "ERROR"
+                Write-AppLog "Fehler bei FSMO-Dokumentation: $($_.Exception.Message)" -Level "ERROR"
                 $errorCount++
             }
         }
-        
+
         Hide-Progress
-        
+
         $message = @"
 Erweiterte Features abgeschlossen:
 
@@ -8750,12 +7796,12 @@ Fehler: $errorCount
 Erstellte Berichte:
 $(($reportData | ForEach-Object { "- $_" }) -join "`n")
 "@
-        
+
         [System.Windows.MessageBox]::Show($message, "Erweiterte Features", "OK", "Information")
-        
+
     } catch {
         Hide-Progress
-        Write-Log "Fehler bei erweiterten Features: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler bei erweiterten Features: $($_.Exception.Message)" -Level "ERROR"
         [System.Windows.MessageBox]::Show("Fehler bei der Ausführung:`n$($_.Exception.Message)", "Fehler", "OK", "Error")
     }
 }
@@ -8771,17 +7817,17 @@ function Show-Progress {
         [string]$Text = "Vorgang läuft...",
         [int]$Value = 0
     )
-    
+
     try {
         Set-UiBusyState -Busy $true
-        $Global:GuiControls.GridProgressArea.Visibility = [System.Windows.Visibility]::Visible
-        $Global:GuiControls.LabelProgress.Content = $Text
-        $Global:GuiControls.ProgressBarMain.Value = $Value
-        
+        $script:GuiControls.GridProgressArea.Visibility = [System.Windows.Visibility]::Visible
+        $script:GuiControls.LabelProgress.Content = $Text
+        $script:GuiControls.ProgressBarMain.Value = $Value
+
         # UI aktualisieren (Dispatcher-Nachrichten verarbeiten, damit die GUI nicht einfriert)
         Invoke-UiRefresh
     } catch {
-        Write-Log "Fehler beim Anzeigen des Fortschritts: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Anzeigen des Fortschritts: $($_.Exception.Message)" -Level "ERROR"
     }
 }
 
@@ -8791,15 +7837,15 @@ function Hide-Progress {
     Versteckt die Fortschrittsanzeige
     #>
     try {
-        $Global:GuiControls.GridProgressArea.Visibility = [System.Windows.Visibility]::Collapsed
-        $Global:GuiControls.ProgressBarMain.Value = 0
+        $script:GuiControls.GridProgressArea.Visibility = [System.Windows.Visibility]::Collapsed
+        $script:GuiControls.ProgressBarMain.Value = 0
         Set-UiBusyState -Busy $false
     } catch {
-        Write-Log "Fehler beim Verstecken des Fortschritts: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Verstecken des Fortschritts: $($_.Exception.Message)" -Level "ERROR"
     }
 }
 
-function Update-Progress {
+function Write-GuiProgress {
     <#
     .SYNOPSIS
     Aktualisiert den Fortschrittsbalken
@@ -8809,41 +7855,41 @@ function Update-Progress {
         [int]$Total,
         [string]$Text = $null
     )
-    
+
     try {
         if ($Total -le 0) { $Total = 1 }
         $percentage = [math]::Min(100, [math]::Round(($Current / $Total) * 100, 0))
-        
+
         if ($Text) {
             Show-Progress -Text "$Text ($Current von $Total)" -Value $percentage
         } else {
-            $Global:GuiControls.ProgressBarMain.Value = $percentage
+            $script:GuiControls.ProgressBarMain.Value = $percentage
             Invoke-UiRefresh
         }
     } catch {
-        Write-Log "Fehler beim Aktualisieren des Fortschritts: $($_.Exception.Message)" -Level "ERROR"
+        Write-AppLog "Fehler beim Aktualisieren des Fortschritts: $($_.Exception.Message)" -Level "ERROR"
     }
 }
 
 #endregion
 
-function Start-Application {
-    try { 
-        Initialize-Application 
-        Write-Log "Starte GUI..." 
-        $null = $Global:Window.ShowDialog() 
-    } catch { 
-        Write-Log "Kritischer Fehler in der Anwendung: $($_.Exception.Message)" -Level "ERROR" 
-        [System.Windows.MessageBox]::Show("Ein kritischer Fehler ist aufgetreten:`n$($_.Exception.Message)", "Kritischer Fehler", "OK", "Error") 
-    } finally { 
-        Write-Log "Anwendung beendet." 
-    } 
-} 
- 
-#endregion 
- 
-# ============================================================================ 
-# SCRIPT ENTRY POINT 
-# ============================================================================ 
-Start-Application
+function Show-MainWindow {
+    try {
+        Initialize-Application
+        Write-AppLog "Starte GUI..."
+        $null = $script:Window.ShowDialog()
+    } catch {
+        Write-AppLog "Kritischer Fehler in der Anwendung: $($_.Exception.Message)" -Level "ERROR"
+        [System.Windows.MessageBox]::Show("Ein kritischer Fehler ist aufgetreten:`n$($_.Exception.Message)", "Kritischer Fehler", "OK", "Error")
+    } finally {
+        Write-AppLog "Anwendung beendet."
+    }
+}
+
+#endregion
+
+# ============================================================================
+# SCRIPT ENTRY POINT
+# ============================================================================
+Show-MainWindow
 
