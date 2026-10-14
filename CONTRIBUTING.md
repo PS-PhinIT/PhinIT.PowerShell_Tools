@@ -27,8 +27,11 @@ Get-ChildItem -Path ./src -Filter *.ps1 -Recurse | ForEach-Object {
 
 # Statische Analyse
 Install-Module PSScriptAnalyzer -Scope CurrentUser
-Invoke-ScriptAnalyzer -Path ./src -Recurse -Severity Error,Warning
+Invoke-ScriptAnalyzer -Path ./src -Recurse
 ```
+
+Erwartetes Ergebnis: 0 Parser-Fehler und 0 PSScriptAnalyzer-Befunde (alle Schweregrade). Unterdrückungen
+(`SuppressMessageAttribute`) nur mit konkreter `Justification`, wenn eine echte Korrektur nicht möglich ist.
 
 Funktionstests benötigen Windows (WPF/WinForms) und – je nach Tool – Active Directory bzw. Administratorrechte.
 AD-Tools ausschließlich in Test-/Laborumgebungen testen.
@@ -44,6 +47,8 @@ AD-Tools ausschließlich in Test-/Laborumgebungen testen.
 - Schreibende AD-/Systemoperationen nur nach Bestätigung bzw. mit `-WhatIf`/`-Confirm`-Unterstützung.
 - Generische Listen statt `+=` auf Arrays in Schleifen verwenden.
 - Den UI-Thread nicht mit `Start-Sleep` oder lang laufenden Operationen blockieren.
+- Oberflächentexte auf Deutsch; technische Werte (Cmdlet-, Policy-, Scope-, AD-Attributnamen, Fehlercodes) bleiben unverändert.
+- Funktionen mit genehmigten Verben (`Get-Verb`) und Nomen im Singular benennen; `$script:` statt `$Global:`.
 - Screenshots gehören nach `assets/screenshots/<Tool>/` (Dateiname: `<Tool>_<Version>_<Ansicht>.png`).
 
 ## Code-Signing

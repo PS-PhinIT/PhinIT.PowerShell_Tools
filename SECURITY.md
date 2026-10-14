@@ -7,11 +7,11 @@ Es wird jeweils nur die aktuelle Version eines Tools unterstützt. Ältere Versi
 
 | Tool | Unterstützt | Nicht unterstützt |
 |------|-------------|-------------------|
-| easyADDummyUserCreator | 0.0.3 | < 0.0.3 |
-| easyExecutionPolicy | 0.0.4 | < 0.0.4 |
-| easyPSInfo | 0.0.4 | < 0.0.4 |
-| easyWINUpdate | 0.2.4 | < 0.2.4 |
-| fakeBitlockerData | 0.0.2 | < 0.0.2 |
+| easyADDummyUserCreator | 0.0.4 | < 0.0.4 |
+| easyExecutionPolicy | 0.0.5 | < 0.0.5 |
+| easyPSInfo | 0.0.5 | < 0.0.5 |
+| easyWINUpdate | 0.2.5 | < 0.2.5 |
+| fakeBitlockerData | 0.0.3 | < 0.0.3 |
 
 ## Schwachstelle melden
 
@@ -30,6 +30,8 @@ Du erhältst so schnell wie möglich eine Rückmeldung; Korrekturen werden in [C
   Nur auf vertrauenswürdigen Admin-Arbeitsstationen ausführen und den Quellcode vor der Ausführung prüfen.
 - **easyADDummyUserCreator** und **fakeBitlockerData** erzeugen Testdaten in Active Directory.
   Ausschließlich in Test-/Laborumgebungen verwenden – niemals in einer Produktivdomäne.
+  fakeBitlockerData verarbeitet standardmäßig nur markierte Fake-Daten; nicht markierte Daten aus Version 0.0.1 nur mit
+  `-IncludeLegacy` (Erkennung per Fingerabdruck) und deren Löschung nur nach zusätzlicher Rückfrage bzw. mit `-ForceLegacyClean`.
 - Es gibt keine fest im Code hinterlegten Standardkennwörter. Generierte Testkennwörter werden nicht in Logdateien geschrieben.
 - Logdateien (`src/<Tool>/Logs/`) und Exporte können Rechner-, Benutzer-, Pfad- und Domänennamen enthalten.
   Diese Ordner sind per `.gitignore` ausgeschlossen und müssen entsprechend geschützt werden.

@@ -4,7 +4,7 @@ Deutschsprachige WPF-Oberfläche, die den Status wichtiger Microsoft-365-/Azure-
 Ausführungsrichtlinien verwaltet und PowerShell-Skripte startet.
 
 - **Changelog:** [CHANGELOG.md](../../CHANGELOG.md)
-- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easypsinfo-004--005)
+- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easypsinfo-003--004) · [Nacharbeiten](../../docs/AUDIT.md#nacharbeiten--zweite-runde)
 - **Screenshots:** [assets/screenshots/easyPSInfo](../../assets/screenshots/easyPSInfo/)
 
 ## Funktionen

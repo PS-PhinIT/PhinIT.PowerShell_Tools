@@ -5,7 +5,7 @@ Deutschsprachige WPF-Oberfläche zum Anlegen und Bereinigen von Testobjekten in 
 > ⚠️ **Nur für Test-/Laborumgebungen.** Niemals in einer Produktivdomäne verwenden.
 
 - **Changelog:** [CHANGELOG.md](../../CHANGELOG.md)
-- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easyaddummyusercreator-003--004)
+- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easyaddummyusercreator-002--003) · [Nacharbeiten](../../docs/AUDIT.md#nacharbeiten--zweite-runde)
 - **Screenshots:** [assets/screenshots/easyADDummyUserCreator](../../assets/screenshots/easyADDummyUserCreator/)
 
 ## Funktionen

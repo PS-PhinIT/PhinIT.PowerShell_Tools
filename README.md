@@ -14,11 +14,11 @@ Active Directory und Microsoft 365 – experimentell, in Entwicklung oder noch n
 
 | Tool | Version | Stand | Beschreibung |
 |------|---------|-------|--------------|
-| [easyWINUpdate](src/easyWINUpdate/README.md) | 0.2.4 | 14.10.2026 | Windows-Update- und WSUS-Verwaltung mit Troubleshooting (WPF) |
-| [easyPSInfo](src/easyPSInfo/README.md) | 0.0.4 | 14.10.2026 | PowerShell-Modul- und Policy-Manager mit Script-Launcher (WPF) |
-| [easyExecutionPolicy](src/easyExecutionPolicy/README.md) | 0.0.4 | 14.10.2026 | Ausführungsrichtlinien anzeigen, setzen, sichern, wiederherstellen (WinForms) |
-| [easyADDummyUserCreator](src/easyADDummyUserCreator/README.md) | 0.0.3 | 14.10.2026 | AD-Testobjekte (Benutzer, Gruppen, Computer, OUs, Service-Accounts) anlegen und bereinigen (WPF) – **nur Testumgebungen** |
-| [fakeBitlockerData](src/fakeBitlockerData/README.md) | 0.0.2 | 14.10.2026 | Fake-BitLocker-/LAPS-Testdaten an AD-Computern erzeugen, prüfen, entfernen (Konsole) – **nur Testumgebungen** |
+| [easyWINUpdate](src/easyWINUpdate/README.md) | 0.2.5 | 14.10.2026 | Windows-Update- und WSUS-Verwaltung mit Troubleshooting (WPF) |
+| [easyPSInfo](src/easyPSInfo/README.md) | 0.0.5 | 14.10.2026 | PowerShell-Modul- und Policy-Manager mit Script-Launcher (WPF) |
+| [easyExecutionPolicy](src/easyExecutionPolicy/README.md) | 0.0.5 | 14.10.2026 | Ausführungsrichtlinien anzeigen, setzen, sichern, wiederherstellen (WinForms) |
+| [easyADDummyUserCreator](src/easyADDummyUserCreator/README.md) | 0.0.4 | 14.10.2026 | AD-Testobjekte (Benutzer, Gruppen, Computer, OUs, Dienstkonten, Drucker) anlegen und bereinigen (WPF) – **nur Testumgebungen** |
+| [fakeBitlockerData](src/fakeBitlockerData/README.md) | 0.0.3 | 14.10.2026 | Fake-BitLocker-/LAPS-Testdaten an AD-Computern erzeugen, prüfen, entfernen (Konsole) – **nur Testumgebungen** |
 
 ## Ordnerstruktur
 

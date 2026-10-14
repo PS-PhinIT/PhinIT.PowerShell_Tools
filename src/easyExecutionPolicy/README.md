@@ -3,7 +3,7 @@
 Deutschsprachige WinForms-Oberfläche zum Anzeigen, Setzen, Sichern und Wiederherstellen der PowerShell-Ausführungsrichtlinien je Scope.
 
 - **Changelog:** [CHANGELOG.md](../../CHANGELOG.md)
-- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easyexecutionpolicy-004--005)
+- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easyexecutionpolicy-003--004) · [Nacharbeiten](../../docs/AUDIT.md#nacharbeiten--zweite-runde)
 - **Screenshots:** [assets/screenshots/easyExecutionPolicy](../../assets/screenshots/easyExecutionPolicy/)
 
 ## Funktionen

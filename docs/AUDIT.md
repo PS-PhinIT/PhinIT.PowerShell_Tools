@@ -6,13 +6,15 @@ Abgleich XAML-Controls ↔ Verwendung im Code, Tests einzelner Hilfsfunktionen u
 
 Status: ✅ behoben · ⚠️ dokumentiertes Restrisiko / offen
 
-| Tool | Version vorher → nachher | Datei |
-|------|--------------------------|-------|
-| easyWINUpdate | 0.2.3 → 0.2.4 | `src/easyWINUpdate/easyWINUpdate.ps1` |
-| easyPSInfo | 0.0.3 → 0.0.4 | `src/easyPSInfo/easyPSInfo.ps1` |
-| easyExecutionPolicy | 0.0.3 → 0.0.4 | `src/easyExecutionPolicy/easyExecutionPolicy.ps1` |
-| easyADDummyUserCreator | 0.0.2 → 0.0.3 | `src/easyADDummyUserCreator/easyADDummyUserCreator.ps1` |
-| fakeBitlockerData | 0.0.1 → 0.0.2 | `src/fakeBitlockerData/fakeBitlockerData.ps1` |
+Die zunächst offenen Punkte wurden am selben Tag in einer zweiten Runde abgearbeitet (siehe [Nacharbeiten](#nacharbeiten--zweite-runde)).
+
+| Tool | Version vorher → Audit → Nacharbeiten | Datei |
+|------|---------------------------------------|-------|
+| easyWINUpdate | 0.2.3 → 0.2.4 → 0.2.5 | `src/easyWINUpdate/easyWINUpdate.ps1` |
+| easyPSInfo | 0.0.3 → 0.0.4 → 0.0.5 | `src/easyPSInfo/easyPSInfo.ps1` |
+| easyExecutionPolicy | 0.0.3 → 0.0.4 → 0.0.5 | `src/easyExecutionPolicy/easyExecutionPolicy.ps1` |
+| easyADDummyUserCreator | 0.0.2 → 0.0.3 → 0.0.4 | `src/easyADDummyUserCreator/easyADDummyUserCreator.ps1` |
+| fakeBitlockerData | 0.0.1 → 0.0.2 → 0.0.3 | `src/fakeBitlockerData/fakeBitlockerData.ps1` |
 
 ## Repository
 
@@ -40,7 +42,7 @@ Status: ✅ behoben · ⚠️ dokumentiertes Restrisiko / offen
 | W6 | Sicherheit | PSWindowsUpdate wird bei Bedarf automatisch aus der PSGallery installiert | ⚠️ Verhalten beibehalten |
 | W7 | Performance | Suche/Installation/Download/Deinstallation/Log-Analyse blockierten die GUI | ✅ Runspace + DispatcherTimer |
 | W8 | Performance | DISM/SFC/CHKDSK blockierten die GUI | ✅ eigenes Konsolenfenster |
-| W9 | Performance | Auto-Fix, Komponenten-Reset, Registry-/Datenbank-Reparatur synchron | ⚠️ offen (zu viele GUI-Abhängigkeiten) |
+| W9 | Performance | Auto-Fix, Komponenten-Reset, Registry-/Datenbank-Reparatur synchron | ✅ in 0.2.5 (N1) |
 | W10 | Funktionen | Log-Analyse brach immer ab (`foreach ($error …)`) | ✅ |
 | W11 | Funktionen | „Verfügbare Updates“ und WSUS-Synchronisierungsverlauf waren simulierte Daten | ✅ Windows-Update-API, Ereignisse 25/26 |
 | W12 | Funktionen | `-Value (if …)` Laufzeitfehler; Text-zu-bool-Fehler beim Auto-Update-Haken | ✅ |
@@ -69,7 +71,7 @@ Status: ✅ behoben · ⚠️ dokumentiertes Restrisiko / offen
 | P8 | Funktionen | „Refresh Modules“ ohne Handler | ✅ |
 | P9 | Funktionen | Admin-Neustart verlor Skriptpfad, startete immer Windows PowerShell | ✅ |
 | P10 | Funktionen | Gestartete Skripte überschrieben globale GUI-Variablen | ✅ sichern/wiederherstellen |
-| P11 | Funktionen | AzureAD/MSOnline abgekündigt, aber gelistet | ⚠️ Entscheidung des Autors |
+| P11 | Funktionen | AzureAD/MSOnline abgekündigt, aber gelistet | ✅ in 0.0.5 als „abgekündigt“ markiert (N7) · Entfernen bleibt Entscheidung des Autors |
 | P12 | Verweise | Logpfad brach bei leerem `$PSScriptRoot`; Logname `easySTARTUP_Setup.log`; spekulative Suchpfade | ✅ |
 | P13 | GUI | Uneinheitliche Titel („easyIT Setup“ …), Footer mit alter Version | ✅ „PhinIT \| easyPSInfo“, 0.0.4 |
 | P14 | GUI | Log scrollte nicht (`ScrollToEnd` im ScrollViewer); Policy-Buttons für GPO-Zeilen aktiv | ✅ |
@@ -89,7 +91,7 @@ Status: ✅ behoben · ⚠️ dokumentiertes Restrisiko / offen
 | E8 | Funktionen | Automatische Backups wurden nie geschrieben | ✅ inkl. Rotation |
 | E9 | Verweise | `$MyInvocation.MyCommand.Path` in Funktion → Skriptpfad beim Neustart verloren; immer `powershell.exe` | ✅ `$PSCommandPath`, gleicher Host |
 | E10 | GUI | Statuszeile abgeschnitten; kein Header/keine Version | ✅ |
-| E11 | GUI | Sprachmix Deutsch/Englisch | ⚠️ kosmetisch, offen |
+| E11 | GUI | Sprachmix Deutsch/Englisch | ✅ in 0.0.5 (N4) |
 
 ## easyADDummyUserCreator 0.0.2 → 0.0.3
 
@@ -105,7 +107,7 @@ Status: ✅ behoben · ⚠️ dokumentiertes Restrisiko / offen
 | A8 | Funktionen | Testdaten-Set scheiterte (OU-Namen), SPN-Port fehlte (`"$host:80"`), `svc-*`/`svc_*` | ✅ |
 | A9 | Funktionen | BitLocker/LAPS/Passwortrichtlinien/verschachtelte Gruppen fehlerhaft (siehe CHANGELOG) | ✅ |
 | A10 | Funktionen | CSV-Import: Ländercodes, PLZ, LDAP-Namen, proxyAddresses, HomeDrive | ✅ |
-| A11 | Funktionen | Tote Funktionen ohne Button (z. B. `Simulate-Migration`, `Create-KerberosTests`), 16 auskommentierte Handler | ⚠️ unverändert |
+| A11 | Funktionen | Tote Funktionen ohne Button (z. B. `Simulate-Migration`, `Create-KerberosTests`), 16 auskommentierte Handler | ✅ in 0.0.4 (N2) |
 | A12 | Verweise | CSV-/Log-/Exportpfade relativ zum Arbeitsverzeichnis | ✅ `$PSScriptRoot` |
 | A13 | Verweise | Version 0.1.0 (Header) vs. 0.0.2 (Konfiguration) | ✅ 0.0.3 |
 | A14 | Befehle | Leerer `catch`, ungültige Attributzuweisungen (`whenCreated`, `badPwdCount`, `lockoutTime`) | ✅ |
@@ -119,29 +121,57 @@ Status: ✅ behoben · ⚠️ dokumentiertes Restrisiko / offen
 | F3 | Sicherheit | `Create` überschrieb echte LAPS-Kennwörter, auch auf Domänencontrollern | ✅ ausgeschlossen |
 | F4 | Sicherheit | Kennwörter aus `Get-Random` | ✅ `RandomNumberGenerator` |
 | F5 | Sicherheit | Dummy-Computer vor der Sicherheitsabfrage angelegt | ✅ |
-| F6 | Sicherheit | Fake-Daten aus 0.0.1 ohne Marker werden nicht erkannt | ⚠️ bewusst (Schutz echter Daten) |
+| F6 | Sicherheit | Fake-Daten aus 0.0.1 ohne Marker werden nicht erkannt | ✅ in 0.0.3 per Opt-in `-IncludeLegacy` (N3) |
 | F7 | Funktionen | BitLocker-Objekte nicht anlegbar (LDAP-Namen, `msFVE-RecoveryGuid`, Objektname), falsches Passwortformat | ✅ |
 | F8 | Funktionen | Windows-LAPS-Ablaufzeit in Unix-Sekunden statt FILETIME | ✅ |
 | F9 | Funktionen | Doppelte Zeilen, fehlende CSV-Spalten, Hotkey-Konflikt, `-Quiet` inkonsequent | ✅ |
-| F10 | Funktionen | Dummy-Computer `FAKE-PC-*` werden von `Clean` nicht gelöscht | ⚠️ markiert, manuell löschen |
+| F10 | Funktionen | Dummy-Computer `FAKE-PC-*` werden von `Clean` nicht gelöscht | ✅ in 0.0.3 per Opt-in `-RemoveDummyComputers` (N3) |
 | F11 | Performance | Zusätzliche AD-Abfragen pro Computer, `+=` | ✅ |
 | F12 | Verweise | Kein Header, keine Version, Export ins Arbeitsverzeichnis | ✅ |
 | F13 | Befehle | `SupportsShouldProcess` ohne `ShouldProcess`-Aufrufe (3), Zuweisung an `$pwd`, `Write-Log`-Konflikt | ✅ |
 
+## Nacharbeiten – zweite Runde
+
+| # | Tool | Offener Punkt | Umsetzung | Status |
+|---|------|---------------|-----------|--------|
+| N1 | easyWINUpdate 0.2.5 | Auto-Fix und Reparaturfunktionen blockierten die Oberfläche (W9) | Alle Reparaturen und Fehlerbehebungen laufen über `Invoke-RepairAction` → `Start-FunctionInBackground` (Runspace + DispatcherTimer); benötigte Funktionen werden als Text übergeben, Status/Log über eine Warteschlange an den GUI-Thread (WPF wird im Runspace nie berührt); Buttons gesperrt, Fortschrittsanzeige, gegenseitiger Ausschluss mit Update-Aktionen, Warnung beim Schließen | ✅ |
+| N2 | easyADDummyUserCreator 0.0.4 | Funktionen ohne Button, 16 auskommentierte Handler (A11) | Erreichbarkeitsanalyse ab `Show-MainWindow`: sinnvolle Funktionen an neue Buttons angebunden (Vorlage, Anmeldezeiten, Avatare, OU-Struktur, Drucker, Performance-Test), 13 doppelte/defekte/gefährliche Funktionen entfernt, alle auskommentierten Handler entfernt; 0 unerreichbare Funktionen, jeder Button hat einen Handler, jede Control-Referenz existiert im XAML | ✅ |
+| N3 | fakeBitlockerData 0.0.3 | 0.0.1-Daten ohne Marker nicht erkannt (F6), Dummy-Computer nicht entfernt (F10) | Opt-in `-IncludeLegacy` mit Fingerabdrücken, bei denen alle Kriterien zutreffen müssen (W1: Windows-LAPS-Kennwort kein JSON + Ablaufzeit in Unix-Sekunden; L1/L2: Legacy-LAPS-Kennwort im 0.0.1-Format an 0.0.1-Dummy bzw. zusammen mit W1; D1: Dummy-Computer mit 0.0.1-Beschreibung, deaktiviert; B1: BitLocker-Objekt ohne Marker mit ungültigem Wiederherstellungskennwort); Löschen nur nach Zusatzrückfrage bzw. `-ForceLegacyClean`; `-RemoveDummyComputers` löscht nur deaktivierte Konten ohne Anmeldung, die nur Fake-Unterobjekte enthalten, nie rekursiv | ✅ · ⚠️ ein einzelnes 0.0.1-Legacy-LAPS-Kennwort an einem echten Computer ist nicht sicher von echten Daten unterscheidbar und wird bewusst nicht erkannt |
+| N4 | alle | Sprachmix Deutsch/Englisch in den Oberflächen (E11) | Alle sichtbaren Texte deutsch; technische Werte (Policy-/Scope-Namen, AD-Attribute, CSV-Spalten, Fehlercodes, KB-Nummern) unverändert; Vergleiche auf Index bzw. angepasste Literale umgestellt, alte gespeicherte Werte werden weiter erkannt | ✅ · RBAC-Rollen- und OU-Vorlagennamen in easyADDummyUserCreator bewusst englisch (AD-Konvention) |
+| N5 | alle | Reine Stilwarnungen (globale Variablen, Verbnamen, Plural, `Write-Host`, ShouldProcess, Leerzeichen) | Echte Korrekturen statt Unterdrückung: `$Global:` → `$script:` (Runspaces erhalten Daten als Parameter), Funktionen auf genehmigte Verben/Singular umbenannt inkl. aller Aufrufstellen, `ShouldProcess` mit echter Prüfung (ohne neue Rückfragen), `Write-Host` → `Write-Verbose`/Logger | ✅ 0 Befunde · einzige Unterdrückung: `PSAvoidUsingWriteHost` in fakeBitlockerData (farbige Konsolenausgabe ist die Oberfläche, mit `-Quiet` abschaltbar) |
+| N6 | easyPSInfo 0.0.5 | Script-Launcher fand nur Skripte im eigenen Ordner `src/easyPSInfo/` | Liegt das Tool unter `src/<Tool>/<Tool>.ps1`, ist der Standard-Basisordner `src/` (alle Tools); Basisordner per „Ordner wählen…“ änderbar, „Standard“ setzt zurück, Speicherung geprüft in `%APPDATA%\PhinIT\easyPSInfo\settings.json`; Suche max. 5 Ebenen/2000 Ordner, ohne `Logs`/`Exports`/`Backups`/„old“/Links | ✅ |
+| N7 | easyPSInfo 0.0.5 | AzureAD/MSOnline abgekündigt (P11) | Status „Abgekündigt“, Tooltip mit Nachfolger, Hinweis bei Installation | ✅ |
+| N8 | easyWINUpdate 0.2.5 | Ungenutzte Hilfsfunktionen | `Get-UpdateSource`, `Get-LastUpdateDate`, `Get-ServiceStatusInfo` entfernt | ✅ |
+
+Verbleibend (⚠️, bewusst bzw. kurz):
+
+- easyWINUpdate: `Get-HotFix` auf der Startseite, das Laden der WSUS-Seite (Verbindungstest bis 3 s) und die Installation von `PSWindowsUpdate`
+  für alle Benutzer beim Anlegen des Zeitplans laufen kurz synchron; beim Schließen wartet das Beenden des Runspaces ggf. auf ein laufendes externes Programm.
+- easyADDummyUserCreator: Test-Umgebung im Domänenstamm (`OU=TestCompany`); Computernamen ohne Zufallsoption und `GRP_<Abteilung>` kollidieren bei
+  wiederholten Läufen; LAPS-Export enthält simulierte Kennwörter im Klartext (A5).
+
+### Umbenannte Funktionen (Auszug)
+
+| Tool | Alt → Neu |
+|------|-----------|
+| easyWINUpdate | `Auto-FixWindowsUpdateIssues` → `Repair-WindowsUpdateIssue`, `Reset-WindowsUpdateComponents` → `Reset-WindowsUpdateComponent`, `Register-WindowsUpdateDLLs` → `Register-WindowsUpdateDLL`, `Load-*Page` → `Show-*Page`, `Update-StatusText` → `Write-StatusText` (insgesamt 24) |
+| easyPSInfo | `Write-Log` → `Write-AppLog`, `Check-AllModules` → `Show-ModuleStatus`, `Update-ScriptList` → `Show-ScriptList` (insgesamt 7) |
+| easyExecutionPolicy | `Ensure-Admin` → `Assert-AdminPrivilege`, `Create-ManualBackup` → `Save-ManualBackup`, `Restore-BackupPolicies` → `Restore-PolicyBackup` (insgesamt 7) |
+| easyADDummyUserCreator | `Create-*` → `New-*`, `Quick-CleanupAll` → `Clear-CreatedTestData`, `Write-Log` → `Write-AppLog`, `Start-Application` → `Show-MainWindow` (insgesamt 50) |
+| fakeBitlockerData | `Get-TargetComputers` → `Get-TargetComputer`, `New-RandomPassword` → `Get-RandomFakePassword`, `New-BitLockerPassword` → `Get-RandomRecoveryPassword` |
+
 ## Prüfergebnisse
 
-| Skript | Parser-Fehler | PSScriptAnalyzer Error | Encoding |
-|--------|---------------|------------------------|----------|
-| easyWINUpdate.ps1 | 0 | 0 | UTF-8 BOM |
-| easyPSInfo.ps1 | 0 | 0 | UTF-8 BOM |
-| easyExecutionPolicy.ps1 | 0 | 0 | UTF-8 BOM |
-| easyADDummyUserCreator.ps1 | 0 | 0 (vorher 11) | UTF-8 BOM |
-| fakeBitlockerData.ps1 | 0 | 0 | UTF-8 BOM |
+| Skript | Parser-Fehler | PSScriptAnalyzer (alle Schweregrade) Audit → Nacharbeiten | Encoding |
+|--------|---------------|-----------------------------------------------------------|----------|
+| easyWINUpdate.ps1 | 0 | 571 → 0 | UTF-8 BOM |
+| easyPSInfo.ps1 | 0 | 121 → 0 | UTF-8 BOM |
+| easyExecutionPolicy.ps1 | 0 | 65 → 0 | UTF-8 BOM |
+| easyADDummyUserCreator.ps1 | 0 | 1681 → 0 | UTF-8 BOM |
+| fakeBitlockerData.ps1 | 0 | 4 → 0 | UTF-8 BOM |
 
-- Die Regeln `PSAvoidUsingInvokeExpression`, `PSAvoidAssignmentToAutomaticVariable`, `PSPossibleIncorrectComparisonWithNull`,
-  `PSAvoidUsingEmptyCatchBlock`, `PSUseBOMForUnicodeEncodedFile`, `PSAvoidUsingConvertToSecureStringWithPlainText` und `PSShouldProcess` haben 0 Treffer.
-- Verbleibende Warnungen sind Stilregeln (globale Variablen, nicht genehmigte Verben, Plural-Nomen, `Write-Host`, ShouldProcess bei GUI-Hilfsfunktionen) –
-  bewusst kein Massen-Refactoring, um das Verhalten nicht zu gefährden.
-- XAML aller WPF-Tools wohlgeformt; alle im Code referenzierten Controls vorhanden.
+- PSScriptAnalyzer 1.25 mit Standardregelsatz; einzige Unterdrückung: `PSAvoidUsingWriteHost` in fakeBitlockerData (begründet, siehe N5).
+- XAML aller WPF-Tools wohlgeformt; alle im Code referenzierten Controls vorhanden, keine doppelten Namen, keine Buttons ohne Handler.
+- Keine definierte, aber nicht aufgerufene Funktion; keine Aufrufe nicht definierter Funktionen.
 - **Nicht durchgeführt:** Funktionstests unter Windows (GUI, Active Directory, Windows Update, UAC) – die Prüfumgebung war Linux.
   Vor dem produktiven Einsatz in einer Testumgebung prüfen und die Skripte neu signieren.

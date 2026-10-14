@@ -6,7 +6,7 @@ Fake-Kennwörtern für Legacy-LAPS und Windows LAPS an AD-Computerobjekten.
 > ⚠️ **Nur für Test-/Laborumgebungen.** Niemals in einer Produktivdomäne verwenden.
 
 - **Changelog:** [CHANGELOG.md](../../CHANGELOG.md)
-- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#fakebitlockerdata-002--003)
+- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#fakebitlockerdata-001--002) · [Nacharbeiten](../../docs/AUDIT.md#nacharbeiten--zweite-runde)
 
 ## Funktionsweise
 

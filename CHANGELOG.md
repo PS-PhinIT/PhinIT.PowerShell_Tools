@@ -8,8 +8,117 @@ Jeder Eintrag gehört zu einem veröffentlichten Stand mit Datum (`DD.MM.YYYY`) 
 
 ## 14.10.2026
 
-Audit-Release: easyWINUpdate 0.2.4 · easyPSInfo 0.0.4 · easyExecutionPolicy 0.0.4 · easyADDummyUserCreator 0.0.3 · fakeBitlockerData 0.0.2.
+Audit-Release: easyWINUpdate 0.2.4 · easyPSInfo 0.0.4 · easyExecutionPolicy 0.0.4 · easyADDummyUserCreator 0.0.3 · fakeBitlockerData 0.0.2,
+danach Abarbeitung der offenen Audit-Punkte: easyWINUpdate 0.2.5 · easyPSInfo 0.0.5 · easyExecutionPolicy 0.0.5 · easyADDummyUserCreator 0.0.4 · fakeBitlockerData 0.0.3.
 Vollständiger Bericht: [docs/AUDIT.md](docs/AUDIT.md).
+
+### easyWINUpdate 0.2.5
+
+#### Sicherheit
+- Es läuft immer nur eine Reparatur; Reparaturen und Update-Suche/-Installation/-Deinstallation schließen sich gegenseitig aus.
+- Schließen des Fensters während einer laufenden Reparatur nur nach Warnung (Ja/Nein), mit Log-Eintrag.
+- Alle Funktionen, die Dienste, Registry oder Ordner ändern, unterstützen `ShouldProcess` (`-WhatIf`/`-Confirm`).
+
+#### Hinzugefügt
+- Fortschrittsanzeige auf der Fehlerbehebungsseite (aktueller Schritt, z. B. „Auto-Fix: Schritt 3/6 …“) und Fortschrittsbalken in der Fußzeile.
+
+#### Behoben
+- Auto-Fix, Komponenten-Reset, Registry- und Datenbank-Reparatur blockierten die Oberfläche – sie laufen jetzt wie alle weiteren Reparaturen
+  im Hintergrund (Runspace + DispatcherTimer): BITS/WaaSMedic, DLL-Registrierung, hängende Updates, Update-Verlauf löschen, Temp bereinigen,
+  Winsock-Reset, Fehlerdiagnose, Log-Analyse, Debug-Modus, Wiederherstellungspunkt, WSUS-Reset, manuelle WSUS-Konfiguration,
+  Richtlinien/Sync-Einstellungen übernehmen und WSUS-Verbindungstest. Die Reparaturschritte selbst sind unverändert; die Buttons sind währenddessen gesperrt.
+- Gespeicherte englische Zeitplanwerte aus Version ≤ 0.2.4 werden weiterhin erkannt.
+
+#### Geändert
+- Oberfläche vollständig deutsch (XAML, Status- und Logmeldungen, Dialoge, Fehlercode-Tabelle mit 50 Einträgen); technische Kennungen (`WU_E_…`, Befehle) unverändert.
+- Version in Fenstertitel, Kopf- und Fußzeile aus einer zentralen Variable.
+- PSScriptAnalyzer: 571 → 0 Befunde (24 Funktionen auf genehmigte Verben/Singular umbenannt, z. B. `Auto-FixWindowsUpdateIssues` → `Repair-WindowsUpdateIssue`,
+  `Load-*Page` → `Show-*Page`, `Update-StatusText` → `Write-StatusText`; `Write-Host` ersetzt).
+
+#### Entfernt
+- Ungenutzte Hilfsfunktionen `Get-UpdateSource`, `Get-LastUpdateDate`, `Get-ServiceStatusInfo`.
+
+### easyPSInfo 0.0.5
+
+#### Hinzugefügt
+- Script-Launcher: Basisordner wählbar („Ordner wählen…“, „Standard“, Anzeige des aktuellen Pfads); Speicherung in `%APPDATA%\PhinIT\easyPSInfo\settings.json` (beim Laden geprüft).
+- Modulliste: Spalte „Status“ (OK/Veraltet/Fehlt/Abgekündigt); AzureAD und MSOnline als „(abgekündigt)“ markiert, mit Tooltip zum Nachfolger,
+  Warnung im Log und Hinweis in der Installationsrückfrage.
+
+#### Behoben
+- Der Launcher fand seit der Umstellung auf `src/<Tool>/` nur Skripte im eigenen Ordner – liegt das Tool unter `src/easyPSInfo/`, wird standardmäßig `src/` durchsucht (alle Tools).
+
+#### Geändert
+- Ordnersuche: max. 5 Ebenen und 2000 Ordner; `Logs`, `Exports`, `Backups`, „old“-Ordner, Junctions/Links und nicht zugreifbare Ordner werden übersprungen; Anzeige in Baumreihenfolge.
+- Log-Maskierung zusätzlich für den Basisordner (`<ScriptBase>`).
+- Oberfläche vollständig deutsch (GUI, Meldungen, Log).
+- PSScriptAnalyzer: 121 → 0 Befunde (`$Global:` → `$script:`, `Write-Host` ersetzt, Funktionen umbenannt, z. B. `Check-AllModules` → `Show-ModuleStatus`).
+
+### easyExecutionPolicy 0.0.5
+
+#### Hinzugefügt
+- Deutsche Kurzbeschreibung hinter der effektiven Policy (z. B. „RemoteSigned – Downloads müssen signiert sein“).
+- Optionaler Schalter `-Verbose` für Diagnosemeldungen (wird beim Neustart als Administrator weitergegeben).
+
+#### Geändert
+- Oberfläche vollständig deutsch (Titel, Menü „Extras“, Buttons, Statuszeile, Dateifilter, Meldungen, Backup-Typen); Policy- und Scope-Namen bleiben als technische Werte.
+- Backup-JSON unverändert – Backups aus 0.0.4 lassen sich weiter wiederherstellen.
+- Konsolenausgaben über `Write-Verbose` statt `Write-Host`.
+- PSScriptAnalyzer: 65 → 0 Befunde (`$Global:` → `$script:`, Funktionen umbenannt, z. B. `Ensure-Admin` → `Assert-AdminPrivilege`, `Create-ManualBackup` → `Save-ManualBackup`).
+
+### easyADDummyUserCreator 0.0.4
+
+#### Sicherheit
+- Alle Benutzer-Erstellungen (Zufall, Vorlage, Testdaten-Set, Komplett-Set, Performance-Test) verwenden das Feld „Initial-Passwort“ bzw. ein CSPRNG-Zufallskennwort je Benutzer.
+- Vorlagenbenutzer übernehmen keine privilegierten Gruppen (`adminCount=1`).
+- Alle zustandsändernden Funktionen unterstützen `ShouldProcess`; Test-OUs werden erst nach der Bestätigung angelegt.
+- Tooltip versprach fälschlich einen CSV-Export der Kennwörter – korrigiert.
+
+#### Hinzugefügt
+- Bisher nicht erreichbare Funktionen über neue Buttons angebunden: „Benutzer aus Vorlage“, „Anmeldezeiten“ (`logonHours`), „Avatare“ (`thumbnailPhoto`),
+  „OU-Struktur“ nach Firmengröße, „Drucker“ (`printQueue`) inkl. Löschen, „Performance-Test“.
+- Statistik-Kachel „Drucker“; Drucker in Export, „Alles löschen“, OU-Besitzprüfung und Statistik.
+- Optionen Sicherheits-/Verteilergruppen, vollständige Hierarchie, temporäres Konto, zufälliges Ablaufdatum, historische Daten, Sonderzeichen;
+  BitLocker-/LAPS-Kontrollkästchen sind jetzt verdrahtet.
+
+#### Behoben
+- Auswahltexte (Testdaten-Größe, Computertyp, Dienst-Typ, OU-Vorlagen) passten nicht zum Code.
+- OU-Struktur legte eine OU „CompanyName“ an, setzte Löschschutz (Bereinigung unmöglich) und überschrieb die Liste der erstellten OUs.
+- Druckerobjekte: Pflichtattribute/Typen, fehlende Nachverfolgung, Namenskollisionen bei wiederholten Läufen.
+- sAMAccountName-/CN-Kollisionen in Testdaten-Set und Komplett-Set; Abschlussmeldungen nannten Sitzungssummen statt der Zahlen des Laufs.
+- Performance-Test: Division durch null, Benutzer nicht in der Test-OU, UPN fehlte.
+- Chaos-Modus: Name einer realen Person in den Testdaten ersetzt, leere sAMAccountNames abgefangen.
+- „Attribute befüllen“: Abhängigkeit vom letzten CSV-Import in Tooltip und Rückfrage erklärt; ein neuer Import leert die Liste der erstellten Benutzer nicht mehr.
+
+#### Geändert
+- Oberfläche vollständig deutsch (u. a. „Dienstkonten“, „Erstellte Benutzer verwalten“); RBAC-Rollen- und OU-Vorlagennamen bleiben englisch (AD-Konvention).
+- Konsolenausgabe des Protokolls nur noch mit `$VerbosePreference = 'Continue'`.
+- PSScriptAnalyzer: 1681 → 0 Befunde (`$Global:` → `$script:` an 375 Stellen, 50 Funktionen umbenannt, z. B. `Create-RandomUsers` → `New-RandomUser`,
+  `Quick-CleanupAll` → `Clear-CreatedTestData`, `Write-Log` → `Write-AppLog`); keine Unterdrückungen mehr.
+
+#### Entfernt
+- Doppelte, defekte oder gefährliche Funktionen ohne Button: `Simulate-Migration` (sIDHistory nicht beschreibbar), `Create-KerberosTests`
+  (setzte uneingeschränkte Delegierung), `Generate-BulkPasswords` (setzte alle Kennwörter zurück), `Create-DynamicSecurityGroups`, `Create-BitLockerKeys`,
+  `Create-DNSEntries`, `Document-FSMORoles`, `Generate-RandomUserData`, `Get-UserTemplate`, `Browse-TemplateUser`, `Add-ToGroup`, `New-RandomPassword`,
+  `Quick-CreateRandomUsers`.
+- Alle auskommentierten Event-Handler, ungenutzte Controls und `Add-Type Microsoft.VisualBasic`.
+
+### fakeBitlockerData 0.0.3
+
+#### Sicherheit
+- Nicht markierte Legacy-Daten werden nur nach zusätzlicher Rückfrage gelöscht; mit `-Quiet` ist `-ForceLegacyClean` Pflicht. Legacy-Kennwörter werden immer maskiert.
+- Dummy-Computer werden nie rekursiv gelöscht – nur deaktivierte Konten ohne Anmeldung, die ausschließlich Fake-Unterobjekte enthalten.
+
+#### Hinzugefügt
+- `-IncludeLegacy`: `Verify`/`Clean` erkennen Fake-Daten aus Version 0.0.1 über dokumentierte Fingerabdrücke
+  (u. a. Windows-LAPS-Ablaufzeit in Unix-Sekunden statt FILETIME, 0.0.1-Dummy-Computer, ungültige Wiederherstellungskennwörter).
+- `-ForceLegacyClean` (Zustimmung ohne Rückfrage) und `-RemoveDummyComputers` (Clean entfernt Dummy-Computer `FAKE-PC-*`).
+- Ergebnisspalte `Status` (`Markiert` / `Legacy 0.0.1`) und Typ `DummyComputer`.
+
+#### Geändert
+- Konsolenausgaben deutsch; Hilfe um Fingerabdrücke, Parameter und Beispiele ergänzt.
+- PSScriptAnalyzer: 4 → 0 Befunde (`Get-TargetComputers` → `Get-TargetComputer`, `New-RandomPassword` → `Get-RandomFakePassword`,
+  `New-BitLockerPassword` → `Get-RandomRecoveryPassword`; `Write-Host` für die farbige Konsolenausgabe mit Begründung unterdrückt).
 
 ### Repository
 - Neue Ordnerstruktur: `src/<Tool>/<Tool>.ps1` (ein Skript pro Tool, ohne Versionsnummer im Dateinamen), `docs/`, `assets/screenshots/<Tool>/`.

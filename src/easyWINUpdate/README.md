@@ -3,7 +3,7 @@
 Deutschsprachige WPF-Oberfläche zur Verwaltung von Windows Updates, WSUS-Einstellungen und zur Fehlersuche.
 
 - **Changelog:** [CHANGELOG.md](../../CHANGELOG.md)
-- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easywinupdate-024--025)
+- **Audit-Bericht:** [docs/AUDIT.md](../../docs/AUDIT.md#easywinupdate-023--024) · [Nacharbeiten](../../docs/AUDIT.md#nacharbeiten--zweite-runde)
 - **Screenshots:** [assets/screenshots/easyWINUpdate](../../assets/screenshots/easyWINUpdate/)
 
 ## Funktionen
