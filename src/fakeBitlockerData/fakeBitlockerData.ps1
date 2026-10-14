@@ -476,7 +476,7 @@ function Get-TargetComputer {
         [string]$SB,
         [string[]]$ExtraProperties
     )
-    $pSB = @{ Filter = '*'; Properties = @('PrimaryGroupID') + @($ExtraProperties); ErrorAction = 'Stop' }
+    $pSB = @{ Filter = '*'; Properties = @('PrimaryGroupID') + @($ExtraProperties | Where-Object { $_ }); ErrorAction = 'Stop' }
     if ($SB) { $pSB.SearchBase = $SB }
 
     try {

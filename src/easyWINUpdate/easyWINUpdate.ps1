@@ -1707,6 +1707,8 @@ function Receive-BackgroundMessage {
 # Wird vom DispatcherTimer im GUI-Thread aufgerufen: Meldungen übernehmen, fertige Aufgaben abschließen
 function Complete-BackgroundTask {
     foreach ($task in @($script:BackgroundTasks)) {
+        # Bereits abgeschlossen (erneuter Timer-Tick, während ein modaler Dialog eines Abschluss-Handlers offen ist)
+        if (-not $script:BackgroundTasks.Contains($task)) { continue }
         # Status vor dem Abholen der Meldungen merken, damit bei fertigen Aufgaben keine Meldung verloren geht
         $isCompleted = $task.Handle.IsCompleted
         Receive-BackgroundMessage -Task $task
